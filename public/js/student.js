@@ -189,14 +189,6 @@ function computeVectorSimilarity(vecA, vecB) {
 // Minimum cosine similarity to accept a face match (higher = stricter)
 const FACE_MATCH_THRESHOLD = 0.93;
 
-// Returns a measure of how much spatial texture variety is in the vector (0–1).
-// A forehead or blank wall scores low; a full face with eyes/nose/mouth scores high.
-function computeTextureComplexity(vector) {
-  const mean = vector.reduce((s, v) => s + v, 0) / vector.length;
-  const variance = vector.reduce((s, v) => s + (v - mean) ** 2, 0) / vector.length;
-  return Math.sqrt(variance); // std-dev of the L2-normalised descriptor
-}
-
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
   if (isFaceLocked) {
@@ -366,20 +358,6 @@ async function startBiometricScanWorkflow() {
           const v2 = extractCanvasFaceVector(video);
           await new Promise(r => setTimeout(r, 150));
           const v3 = extractCanvasFaceVector(video);
-
-          // Guard: reject if the frame doesn't have enough facial complexity
-          // (a forehead, wall, or hand will have very low texture variance)
-          const complexity = (computeTextureComplexity(v1) + computeTextureComplexity(v2) + computeTextureComplexity(v3)) / 3;
-          if (complexity < 0.04) {
-            promptEl.textContent = '⚠️ Full face not detected!';
-            promptEl.style.color = '#fbbf24';
-            subtextEl.textContent = 'Please centre your entire face — eyes, nose and mouth must be visible.';
-            setScanStatus('Full face not visible. Align your face with the camera and try again.', 'warning');
-            cleanupVerificationView();
-            document.getElementById('scan-prompt').classList.remove('hidden');
-            isProcessing = false;
-            return;
-          }
 
           const sim1 = computeVectorSimilarity(userFaceProfile, v1);
           const sim2 = computeVectorSimilarity(userFaceProfile, v2);
