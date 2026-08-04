@@ -61,10 +61,11 @@ const authLimiter = rateLimit({
 
 const scanLimiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 15, // 15 scan attempts per min
+  max: 250, // Allows large lecture halls (200+ students) sharing campus NAT IP
   message: { error: 'Too many attendance submission attempts. Slow down.' },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test'
 });
 
 app.use('/api', globalLimiter);
