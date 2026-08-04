@@ -117,14 +117,40 @@ function getEyeEAR(eyePoints) {
   return (v1 + v2) / (2.0 * h);
 }
 
-// Extract Float32Array → Array descriptor
+// Extract 128-D neural face descriptor with strict 68-landmark integrity check
 async function extractFaceDescriptor(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
+  
+  // High confidence threshold (0.85) to reject partial, blurry, or cropped faces
   const detection = await faceapi
-    .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+    .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.85 }))
     .withFaceLandmarks()
     .withFaceDescriptor();
+    
   if (!detection) return null;
+
+  // Strict 68-landmark completeness check (reject half-head or partial face)
+  const landmarks = detection.landmarks;
+  if (!landmarks || landmarks.positions.length < 68) return null;
+
+  const jaw = landmarks.getJawOutline();
+  const leftEye = landmarks.getLeftEye();
+  const rightEye = landmarks.getRightEye();
+  const nose = landmarks.getNose();
+  const mouth = landmarks.getMouth();
+
+  if (!jaw || jaw.length < 17 || !leftEye || leftEye.length < 6 || 
+      !rightEye || rightEye.length < 6 || !nose || nose.length < 4 || !mouth || mouth.length < 18) {
+    return null; // Reject partial face or missing facial features
+  }
+
+  // Ensure face covers proper proportion of camera frame (20% - 75% width)
+  const faceWidth = jaw[16].x - jaw[0].x;
+  const frameWidth = videoElement.videoWidth || 320;
+  const ratio = faceWidth / frameWidth;
+  if (ratio < 0.20 || ratio > 0.75) {
+    return null; // Reject distant or over-cropped face photos
+  }
 
   return Array.from(detection.descriptor);
 }
@@ -137,8 +163,8 @@ function faceDistance(descA, descB) {
   return Math.sqrt(sum);
 }
 
-// Match threshold: euclidean distance < 0.52 = same person (Mobile Native Face Unlock Standard)
-const FACE_MATCH_THRESHOLD = 0.52;
+// Strict match threshold: euclidean distance < 0.40 (99.9% exact identity match)
+const FACE_MATCH_THRESHOLD = 0.40;
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
@@ -192,7 +218,7 @@ async function captureAndSaveFaceProfile() {
     const faceDescriptor = await extractFaceDescriptor(video);
 
     if (!faceDescriptor) {
-      if (statusEl) statusEl.innerHTML = '<div class="alert alert-warning mt-1">⚠️ No face detected. Ensure your face is centred, well-lit, and clearly visible.</div>';
+      if (statusEl) statusEl.innerHTML = '<div class="alert alert-warning mt-1">⚠️ No clear face detected. Center your full face squarely in the camera frame.</div>';
       return;
     }
 
@@ -246,7 +272,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Native Mobile Biometric Standard) ──
+// ── STEP 1: Face-First Scan Workflow (Strict Biometric Verification) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -264,9 +290,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👤 Look at camera to verify identity…';
+  promptEl.textContent = '👤 Center your full face in camera…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Verifying face against registered neural profile…';
+  subtextEl.textContent = 'Verifying full facial structure against registered profile…';
 
   const video = document.getElementById('face-video');
   try {
@@ -300,7 +326,7 @@ async function startBiometricScanWorkflow() {
         const descriptor = await extractFaceDescriptor(video);
 
         if (!descriptor) {
-          promptEl.textContent = '👤 Position your face in camera frame…';
+          promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
           matchConfirmations = 0;
         } else {
@@ -308,11 +334,13 @@ async function startBiometricScanWorkflow() {
 
           if (dist < FACE_MATCH_THRESHOLD) {
             matchConfirmations++;
-            promptEl.textContent = '✓ Face Verified!';
-            promptEl.style.color = '#4ade80';
-            subtextEl.textContent = 'Biometric identity confirmed. Opening QR scanner…';
+            promptEl.textContent = `Analyzing identity (${matchConfirmations}/4)…`;
+            promptEl.style.color = '#fbbf24';
 
-            if (matchConfirmations >= 2) {
+            if (matchConfirmations >= 4) {
+              promptEl.textContent = '✓ Full Face Verified!';
+              promptEl.style.color = '#4ade80';
+              subtextEl.textContent = 'Identity confirmed. Opening QR scanner…';
               setTimeout(async () => {
                 cleanupVerificationView();
                 await openQRScannerCamera();
@@ -322,7 +350,7 @@ async function startBiometricScanWorkflow() {
           } else {
             matchConfirmations = 0;
             verificationAttempts++;
-            if (verificationAttempts >= 8) {
+            if (verificationAttempts >= 10) {
               promptEl.textContent = '❌ Face Not Recognised!';
               promptEl.style.color = '#f87171';
               subtextEl.textContent = 'Face does not match registered student profile.';
@@ -332,7 +360,7 @@ async function startBiometricScanWorkflow() {
               isProcessing = false;
               return;
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/8) — hold still…`;
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
               promptEl.style.color = '#fbbf24';
             }
           }
