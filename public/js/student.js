@@ -117,8 +117,8 @@ function getEyeEAR(eyePoints) {
   return (v1 + v2) / (2.0 * h);
 }
 
-// Extract face descriptor AND Eye Aspect Ratio (EAR) for adaptive blink liveness
-async function extractFaceDetails(videoElement) {
+// Extract Float32Array → Array descriptor
+async function extractFaceDescriptor(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
     .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
@@ -126,22 +126,7 @@ async function extractFaceDetails(videoElement) {
     .withFaceDescriptor();
   if (!detection) return null;
 
-  const leftEye = detection.landmarks.getLeftEye();
-  const rightEye = detection.landmarks.getRightEye();
-  const leftEAR = getEyeEAR(leftEye);
-  const rightEAR = getEyeEAR(rightEye);
-  const ear = (leftEAR + rightEAR) / 2.0;
-
-  return {
-    descriptor: Array.from(detection.descriptor),
-    ear
-  };
-}
-
-// Extract Float32Array → Array descriptor
-async function extractFaceDescriptor(videoElement) {
-  const details = await extractFaceDetails(videoElement);
-  return details ? details.descriptor : null;
+  return Array.from(detection.descriptor);
 }
 
 // Euclidean distance between two 128-D descriptors.
@@ -152,8 +137,8 @@ function faceDistance(descA, descB) {
   return Math.sqrt(sum);
 }
 
-// Match threshold: euclidean distance < 0.55 = same person
-const FACE_MATCH_THRESHOLD = 0.55;
+// Match threshold: euclidean distance < 0.52 = same person (Mobile Native Face Unlock Standard)
+const FACE_MATCH_THRESHOLD = 0.52;
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
@@ -261,7 +246,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Adaptive Blink + Screen Light Reflection Liveness) ──
+// ── STEP 1: Face-First Scan Workflow (Native Mobile Biometric Standard) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -279,9 +264,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👁️ Blink naturally to verify identity…';
+  promptEl.textContent = '👤 Look at camera to verify identity…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Standard Liveness: Blink naturally once while facing camera…';
+  subtextEl.textContent = 'Verifying face against registered neural profile…';
 
   const video = document.getElementById('face-video');
   try {
@@ -295,29 +280,15 @@ async function startBiometricScanWorkflow() {
   }
 
   let startTime = Date.now();
-  let openEyeBaselineSamples = [];
-  let personalBaselineEAR = null;
-  let blinkClosedPassed = false;
-  let blinkReopenedPassed = false;
   let verificationAttempts = 0;
-
-  // Trigger subtle ambient light pulse for video screen playback anti-spoofing
-  let lightPulseActive = false;
-  setTimeout(() => {
-    lightPulseActive = true;
-    faceView.style.boxShadow = '0 0 35px rgba(56, 189, 248, 0.6)';
-    setTimeout(() => {
-      faceView.style.boxShadow = '';
-      lightPulseActive = false;
-    }, 400);
-  }, 1000);
+  let matchConfirmations = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 25000) {
-      subtextEl.textContent = '⚠️ Timed out. Photo/Video detected or blink not recorded.';
-      setScanStatus('Biometric rejected — photo/video spoof detected or blink not recorded.', 'error');
+    if (Date.now() - startTime > 15000) {
+      subtextEl.textContent = '⚠️ Timed out. Click Try Again.';
+      setScanStatus('Biometric verification timed out.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
@@ -326,70 +297,43 @@ async function startBiometricScanWorkflow() {
 
     if (video.videoWidth > 0) {
       try {
-        const details = await extractFaceDetails(video);
+        const descriptor = await extractFaceDescriptor(video);
 
-        if (!details) {
-          promptEl.textContent = '👤 Position your face in camera…';
+        if (!descriptor) {
+          promptEl.textContent = '👤 Position your face in camera frame…';
           promptEl.style.color = '#fbbf24';
+          matchConfirmations = 0;
         } else {
-          const { descriptor, ear } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          // 1. Identity Check
-          if (dist >= FACE_MATCH_THRESHOLD) {
+          if (dist < FACE_MATCH_THRESHOLD) {
+            matchConfirmations++;
+            promptEl.textContent = '✓ Face Verified!';
+            promptEl.style.color = '#4ade80';
+            subtextEl.textContent = 'Biometric identity confirmed. Opening QR scanner…';
+
+            if (matchConfirmations >= 2) {
+              setTimeout(async () => {
+                cleanupVerificationView();
+                await openQRScannerCamera();
+              }, 300);
+              return;
+            }
+          } else {
+            matchConfirmations = 0;
             verificationAttempts++;
-            if (verificationAttempts >= 10) {
+            if (verificationAttempts >= 8) {
               promptEl.textContent = '❌ Face Not Recognised!';
               promptEl.style.color = '#f87171';
-              subtextEl.textContent = 'Face does not match registered profile.';
+              subtextEl.textContent = 'Face does not match registered student profile.';
               setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
               cleanupVerificationView();
               document.getElementById('scan-prompt').classList.remove('hidden');
               isProcessing = false;
               return;
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/8) — hold still…`;
               promptEl.style.color = '#fbbf24';
-            }
-          } else {
-            // 2. Adaptive Personal Eye-Blink Baseline Liveness
-            // Phase A: Collect initial open-eye baseline (3 frames)
-            if (personalBaselineEAR === null) {
-              openEyeBaselineSamples.push(ear);
-              if (openEyeBaselineSamples.length >= 3) {
-                personalBaselineEAR = openEyeBaselineSamples.reduce((a, b) => a + b, 0) / openEyeBaselineSamples.length;
-              }
-              promptEl.textContent = '👁️ Blink naturally to verify identity…';
-              promptEl.style.color = '#fbbf24';
-            } 
-            // Phase B: Detect Eye-Blink relative to personal baseline
-            else {
-              const closeThreshold = personalBaselineEAR * 0.70; // 30% drop in eye ratio
-              const reopenThreshold = personalBaselineEAR * 0.85; // return near baseline
-
-              if (!blinkClosedPassed) {
-                if (ear <= closeThreshold) {
-                  blinkClosedPassed = true;
-                  promptEl.textContent = '👁️ Eye blink detected…';
-                  promptEl.style.color = '#fbbf24';
-                }
-              } else if (!blinkReopenedPassed) {
-                if (ear >= reopenThreshold) {
-                  blinkReopenedPassed = true;
-                }
-              }
-
-              // Completion: Personal Blink Sequence completed + Identity verified
-              if (blinkClosedPassed && blinkReopenedPassed) {
-                promptEl.textContent = '✓ Live Face Verified!';
-                promptEl.style.color = '#4ade80';
-                subtextEl.textContent = 'Liveness & identity confirmed. Opening QR scanner…';
-                setTimeout(async () => {
-                  cleanupVerificationView();
-                  await openQRScannerCamera();
-                }, 400);
-                return;
-              }
             }
           }
         }
@@ -398,7 +342,7 @@ async function startBiometricScanWorkflow() {
       }
     }
 
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 150));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
