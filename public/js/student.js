@@ -58,17 +58,46 @@ async function checkFaceProfileStatus() {
     const data = await res.json();
 
     const setupCard = document.getElementById('card-face-setup');
+    const reEnrollBtn = document.getElementById('re-enroll-face-btn');
 
     if (data.hasFaceProfile) {
       userFaceProfile = data.faceDescriptor;
       isFaceLocked = true;
       if (setupCard) setupCard.style.display = 'none';
+      // Show re-enroll button in case user needs to reset
+      if (reEnrollBtn) reEnrollBtn.style.display = 'block';
     } else {
       isFaceLocked = false;
+      userFaceProfile = null;
       if (setupCard) setupCard.style.display = 'block';
+      if (reEnrollBtn) reEnrollBtn.style.display = 'none';
     }
   } catch (err) {
     console.error('Face profile status check error:', err);
+  }
+}
+
+// ── Reset Face Profile (calls DELETE endpoint, re-shows enroll card) ────
+async function resetFaceProfile() {
+  if (!confirm('This will delete your saved face profile and let you re-enroll. Continue?')) return;
+  try {
+    const res = await fetch(`${API}/api/auth/face-profile`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${getToken()}` }
+    });
+    if (res.ok) {
+      userFaceProfile = null;
+      isFaceLocked = false;
+      const setupCard = document.getElementById('card-face-setup');
+      const reEnrollBtn = document.getElementById('re-enroll-face-btn');
+      if (setupCard) setupCard.style.display = 'block';
+      if (reEnrollBtn) reEnrollBtn.style.display = 'none';
+      alert('Face profile cleared. Please re-enroll your face.');
+    } else {
+      alert('Failed to reset face profile.');
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
   }
 }
 
@@ -126,15 +155,12 @@ function faceDistance(descA, descB) {
   return Math.sqrt(sum);
 }
 
-// Match threshold: < 0.45 euclidean distance = confirmed match
-const FACE_MATCH_THRESHOLD = 0.45;
+// Match threshold: euclidean distance < 0.55 = same person
+// face-api.js recommended: 0.5–0.6 for browser cameras (0.45 is too strict)
+const FACE_MATCH_THRESHOLD = 0.55;
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
-  if (isFaceLocked) {
-    alert('Facial profile is locked and can only be registered once.');
-    return;
-  }
   document.getElementById('enroll-face-modal').classList.remove('hidden');
   startEnrollCamera();
 }
@@ -157,7 +183,6 @@ async function startEnrollCamera() {
 }
 
 async function captureAndSaveFaceProfile() {
-  if (isFaceLocked) return alert('Facial profile is locked.');
 
   const video = document.getElementById('enroll-video');
   const statusEl = document.getElementById('enroll-modal-status');
@@ -689,6 +714,7 @@ window.flipFaceCamera = flipFaceCamera;
 window.flipQRCamera = flipQRCamera;
 window.flipEnrollCamera = flipEnrollCamera;
 window.resetScanner = resetScanner;
+window.resetFaceProfile = resetFaceProfile;
 window.submitManualToken = submitManualToken;
 window.loadAnalytics = loadAnalytics;
 window.changeCalMonth = changeCalMonth;
@@ -706,6 +732,7 @@ function bindStudentEventListeners() {
   document.getElementById('btn-flip-qr-camera')?.addEventListener('click', flipQRCamera);
   document.getElementById('btn-flip-enroll-camera')?.addEventListener('click', flipEnrollCamera);
   document.getElementById('btn-reset-scanner')?.addEventListener('click', resetScanner);
+  document.getElementById('re-enroll-face-btn')?.addEventListener('click', resetFaceProfile);
   document.getElementById('btn-submit-manual-token')?.addEventListener('click', submitManualToken);
   document.getElementById('btn-refresh-analytics')?.addEventListener('click', loadAnalytics);
   document.getElementById('logout-btn')?.addEventListener('click', logout);

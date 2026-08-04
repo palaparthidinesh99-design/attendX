@@ -1,3 +1,4 @@
 node_modules/
 .env
 *.log
+INTERVIEW_PREPARATION_GUIDE.md

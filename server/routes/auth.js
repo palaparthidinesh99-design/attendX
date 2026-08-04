@@ -107,15 +107,28 @@ router.post('/face-profile', authenticate, requireRole('student'), async (req, r
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    if (user.faceProfileLocked) {
-      return res.status(403).json({ error: 'Facial profile is locked and can only be registered once' });
-    }
-
+    // Always allow saving — re-enrollment replaces the old profile
     user.faceDescriptor = faceDescriptor;
     user.faceProfileLocked = true;
     await user.save();
 
-    res.json({ success: true, message: 'Facial profile registered and locked successfully' });
+    res.json({ success: true, message: 'Facial profile registered successfully' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/auth/face-profile (Reset face profile for re-enrollment)
+router.delete('/face-profile', authenticate, requireRole('student'), async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    user.faceDescriptor = undefined;
+    user.faceProfileLocked = false;
+    await user.save();
+
+    res.json({ success: true, message: 'Face profile cleared. You can now re-enroll.' });
   } catch (err) {
     next(err);
   }
