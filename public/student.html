@@ -119,13 +119,13 @@
           <div class="card mb-2" id="card-face-setup">
             <div class="section-header" style="margin-bottom:0.5rem;">
               <div>
-                <h3>👤 Register Facial Profile</h3>
-                <p style="font-size:0.8rem;">Required once for biometric verification</p>
+                <h3>👤 Facial Profile Status</h3>
+                <p style="font-size:0.8rem;">Required once for AI anti-proxy verification</p>
               </div>
               <span id="face-profile-status-badge" class="badge badge-red">Not Registered</span>
             </div>
             <button type="button" class="btn btn-primary btn-sm btn-full" id="setup-face-btn">
-              📷 Setup Facial Profile
+              📷 Register Facial Profile
             </button>
           </div>
 
@@ -134,24 +134,24 @@
             <div class="scanner-section">
               <div id="scan-prompt" style="text-align:center;">
                 <h2>Mark Attendance</h2>
-                <p style="font-size:0.82rem;margin-top:0.2rem;">Verify your face first, then scan teacher's QR code</p>
+                <p style="font-size:0.82rem;margin-top:0.2rem;">Verify AI biometric identity, then scan class QR code</p>
                 <button type="button" class="btn btn-primary btn-lg mt-2" id="btn-start-biometric-scan">
-                  📷 Verify Face &amp; Scan Attendance
+                  📷 Verify Face &amp; Scan QR
                 </button>
               </div>
 
               <!-- Face Liveness Camera View (Step 1) -->
               <div id="face-verification-view" class="hidden" style="width:100%;max-width:340px;text-align:center;">
                 <div class="camera-overlay">
-                  <div class="liveness-badge" id="liveness-prompt">👤 Position face in camera…</div>
+                  <div class="liveness-badge" id="liveness-prompt">👤 Position face in frame…</div>
                   <video id="face-video" autoplay muted playsinline></video>
                 </div>
                 <div class="flex justify-between items-center mt-1">
                   <button type="button" class="btn btn-ghost btn-sm" id="btn-flip-face-camera">🔄 Flip Camera</button>
-                  <small style="color:var(--text-muted);">Step 1: Facial Match</small>
+                  <small style="color:var(--text-muted);">Step 1: AI Facial Match</small>
                 </div>
                 <p style="font-size:0.8rem;color:var(--text-muted);margin-top:0.3rem;" id="liveness-subtext">
-                  Blink or Nod to confirm liveness &amp; facial match.
+                  Look directly into camera for neural biometric verification.
                 </p>
               </div>
 
@@ -165,7 +165,7 @@
 
               <!-- Success Overlay -->
               <div id="success-view" class="hidden" style="width:100%;text-align:center;padding:1.5rem 0;">
-                <div style="width:50px;height:50px;background:var(--accent-success);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:1.75rem;color:white;margin-bottom:0.6rem;">
+                <div style="width:52px;height:52px;background:var(--accent-success);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:1.75rem;color:white;margin-bottom:0.6rem;box-shadow:0 0 16px rgba(16,185,129,0.5);">
                   ✓
                 </div>
                 <h3>Attendance Marked!</h3>
@@ -180,7 +180,7 @@
             <div style="border-top:1px solid var(--border);margin-top:1.25rem;padding-top:1rem;">
               <label class="form-label" for="manual-token">Manual Token Entry</label>
               <div style="display:flex;gap:0.5rem;">
-                <input class="form-input" type="text" id="manual-token" placeholder='Paste QR JSON...' style="font-size:0.8rem;" />
+                <input class="form-input" type="text" id="manual-token" placeholder='Paste QR Code Payload...' style="font-size:0.8rem;" />
                 <button type="button" class="btn btn-ghost btn-sm" id="btn-submit-manual-token">Submit</button>
               </div>
             </div>

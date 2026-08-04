@@ -507,33 +507,19 @@ async function submitManualToken() {
 }
 
 // ── Compact Monthly Attendance Calendar & Side Panel Renderer ────────────
-let currentCalDate = new Date();
-let selectedDateStr = new Date().toISOString().split('T')[0];
-
 function renderInteractiveCalendar() {
   const container = document.getElementById('calendar-month-container');
   if (!container) return;
 
-  const today = new Date();
+  const now = new Date();
   const year = currentCalDate.getFullYear();
   const month = currentCalDate.getMonth();
+  const monthName = currentCalDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
-  // 1-year boundary bounds (from 12 months ago to current month)
-  const minDate = new Date(today.getFullYear(), today.getMonth() - 12, 1);
-  const maxDate = new Date(today.getFullYear(), today.getMonth(), 1);
-
-  const canPrev = new Date(year, month - 1, 1) >= minDate;
-  const canNext = new Date(year, month + 1, 1) <= maxDate;
-
-  // Build Month-Year Dropdown options (past 12 months)
-  let monthOptions = '';
-  for (let i = 0; i <= 12; i++) {
-    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-    const val = `${d.getFullYear()}-${d.getMonth()}`;
-    const label = d.toLocaleString('default', { month: 'long', year: 'numeric' });
-    const isSelected = d.getFullYear() === year && d.getMonth() === month;
-    monthOptions += `<option value="${val}" ${isSelected ? 'selected' : ''}>${label}</option>`;
-  }
+  // Calculate month difference from current month (1-year past limit = 12 months)
+  const monthsDiff = (now.getFullYear() - year) * 12 + (now.getMonth() - month);
+  const canGoPrev = monthsDiff < 12;
+  const canGoNext = monthsDiff > 0;
 
   const firstDayIndex = new Date(year, month, 1).getDay();
   const lastDate = new Date(year, month + 1, 0).getDate();
@@ -547,11 +533,11 @@ function renderInteractiveCalendar() {
     dayCells += `<div class="cal-day-cell other-month"></div>`;
   }
 
-  const todayStr = today.toISOString().split('T')[0];
+  const todayStr = now.toISOString().split('T')[0];
 
   for (let day = 1; day <= lastDate; day++) {
     const dStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const sessions = window.sessionsByDateMap ? (window.sessionsByDateMap[dStr] || []) : [];
+    const sessions = window.sessionsByDateMap[dStr] || [];
     const isToday = dStr === todayStr;
     const isSelected = dStr === selectedDateStr;
 
@@ -562,34 +548,34 @@ function renderInteractiveCalendar() {
       const hasMissed = sessions.some(s => s.status === 'ABSENT');
 
       if (hasAttended) dotsHtml += `<span class="cal-dot green" title="Attended"></span>`;
-      if (hasOngoing) dotsHtml += `<span class="cal-dot" title="Live class in progress" style="background:#3b82f6;box-shadow:0 0 6px rgba(59,130,246,0.6);"></span>`;
-      if (hasMissed) dotsHtml += `<span class="cal-dot red" title="Missed class"></span>`;
+      if (hasOngoing) dotsHtml += `<span class="cal-dot blue" title="Live class in progress"></span>`;
+      if (hasMissed) dotsHtml += `<span class="cal-dot red" title="Missed"></span>`;
     }
 
     dayCells += `
-      <div class="cal-day-cell ${isToday ? 'today' : ''} ${isSelected ? 'selected-day' : ''}" onclick="window.renderSidePanelDayDetails('${dStr}')">
+      <div class="cal-day-cell ${isToday ? 'today' : ''} ${isSelected ? 'selected-day' : ''} ${!sessions.length ? 'has-no-class' : ''}" onclick="window.selectCalendarDate('${dStr}')">
         <span class="cal-day-num">${day}</span>
         <div class="cal-dots">${dotsHtml}</div>
       </div>`;
   }
 
+  const isCurrentMonth = monthsDiff === 0;
+
   container.innerHTML = `
     <div class="calendar-month-header">
-      <button type="button" class="btn btn-ghost btn-sm" onclick="window.changeCalMonth(-1)" ${!canPrev ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : ''}>← Prev</button>
-      <select class="calendar-month-select" onchange="window.jumpToCalMonth(this.value)">
-        ${monthOptions}
-      </select>
-      <button type="button" class="btn btn-ghost btn-sm" onclick="window.changeCalMonth(1)" ${!canNext ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : ''}>Next →</button>
+      <div class="flex items-center gap-1">
+        <button type="button" class="btn btn-ghost btn-sm" ${!canGoPrev ? 'disabled' : ''} onclick="window.changeCalMonth(-1)">← Prev</button>
+        <button type="button" class="btn btn-ghost btn-sm" ${!canGoNext ? 'disabled' : ''} onclick="window.changeCalMonth(1)">Next →</button>
+        ${!isCurrentMonth ? `<button type="button" class="btn btn-ghost btn-sm" style="color:var(--accent-primary);" onclick="window.resetToCurrentMonth()">Today</button>` : ''}
+      </div>
+      <div class="flex items-center gap-1">
+        <span class="calendar-month-title">${monthName}</span>
+        ${monthsDiff > 0 ? `<span class="badge badge-purple" style="font-size:0.7rem;">Past History (${monthsDiff}m ago)</span>` : ''}
+      </div>
     </div>
     <div class="calendar-month-grid">
       ${daysHeader}
       ${dayCells}
-    </div>
-    <div class="calendar-legend">
-      <div class="legend-item"><span class="cal-dot green"></span> Attended</div>
-      <div class="legend-item"><span class="cal-dot" style="background:#3b82f6;"></span> Live Class</div>
-      <div class="legend-item"><span class="cal-dot red"></span> Missed</div>
-      <div class="legend-item" style="opacity:0.75;">☕ No Class</div>
     </div>
   `;
 
@@ -597,28 +583,32 @@ function renderInteractiveCalendar() {
 }
 
 function changeCalMonth(delta) {
-  const today = new Date();
-  const minDate = new Date(today.getFullYear(), today.getMonth() - 12, 1);
-  const maxDate = new Date(today.getFullYear(), today.getMonth(), 1);
+  const now = new Date();
+  const target = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + delta, 1);
+  const monthsDiff = (now.getFullYear() - target.getFullYear()) * 12 + (now.getMonth() - target.getMonth());
 
-  const targetDate = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + delta, 1);
-  if (targetDate >= minDate && targetDate <= maxDate) {
-    currentCalDate = targetDate;
+  // Restrict navigation between current month and 12 months in the past
+  if (monthsDiff >= 0 && monthsDiff <= 12) {
+    currentCalDate = target;
     renderInteractiveCalendar();
   }
 }
 
-function jumpToCalMonth(valStr) {
-  if (!valStr) return;
-  const [y, m] = valStr.split('-').map(Number);
-  currentCalDate = new Date(y, m, 1);
+function resetToCurrentMonth() {
+  currentCalDate = new Date();
+  selectedDateStr = new Date().toISOString().split('T')[0];
   renderInteractiveCalendar();
 }
 
-// ── Render Day Details in Side Panel (Attended vs Ongoing vs Missed) ─────
+function selectCalendarDate(dateStr) {
+  selectedDateStr = dateStr;
+  renderInteractiveCalendar();
+}
+
+// ── Render Day Details in Side Panel (Attended vs Ongoing vs Missed vs No Class) ─────
 function renderSidePanelDayDetails(dateStr) {
   selectedDateStr = dateStr;
-  const sessions = window.sessionsByDateMap ? (window.sessionsByDateMap[dateStr] || []) : [];
+  const sessions = window.sessionsByDateMap[dateStr] || [];
 
   const titleEl = document.getElementById('side-panel-title');
   const subEl = document.getElementById('side-panel-subtitle');
@@ -632,50 +622,45 @@ function renderSidePanelDayDetails(dateStr) {
   } catch (_) {}
 
   if (titleEl) titleEl.textContent = `📅 ${formattedDate}`;
-  if (subEl) subEl.textContent = sessions.length ? `${sessions.length} class session(s) held` : 'No classes scheduled';
+  if (subEl) subEl.textContent = sessions.length ? `${sessions.length} class session(s) held` : 'No Class Scheduled';
 
   if (contentEl) {
     if (!sessions.length) {
       contentEl.innerHTML = `
-        <div class="no-class-box">
-          <div class="no-class-icon">☕</div>
-          <div class="no-class-title">No Classes Scheduled</div>
-          <div class="no-class-desc">No class sessions were held on ${formattedDate}.</div>
+        <div style="padding:1.5rem 1rem;text-align:center;background:rgba(255,255,255,0.02);border:1px dashed var(--border);border-radius:var(--radius-sm);margin-top:0.5rem;">
+          <div style="font-size:1.8rem;margin-bottom:0.4rem;">☕</div>
+          <strong style="font-size:0.9rem;color:var(--text-primary);display:block;">No Class Scheduled</strong>
+          <p style="font-size:0.78rem;color:var(--text-muted);margin-top:0.25rem;">No lecture sessions were held on ${formattedDate}.</p>
         </div>`;
     } else {
       contentEl.innerHTML = sessions.map(s => {
         let badge = '';
         if (s.status === 'PRESENT') {
-          badge = `<span class="badge badge-green">Attended ✓</span>`;
+          badge = `<span class="badge badge-green">✓ Attended</span>`;
         } else if (s.status === 'ONGOING') {
-          badge = `<span class="badge badge-blue">Live Session ▶</span>`;
+          badge = `<span class="badge badge-blue">▶ Live Class</span>`;
         } else {
-          badge = `<span class="badge badge-red">Missed ❌</span>`;
+          badge = `<span class="badge badge-red">❌ Missed Class</span>`;
         }
 
         const meta = s.status === 'PRESENT'
-          ? `🕒 Checked in at ${s.timeString} &nbsp;|&nbsp; 📍 ${s.distanceMeters != null ? s.distanceMeters + 'm' : 'Verified'}`
+          ? `🕒 Check-in: ${s.timeString} &nbsp;|&nbsp; 📍 ${s.distanceMeters != null ? s.distanceMeters + 'm' : 'Verified'}`
           : s.status === 'ONGOING'
-            ? `Instructor: ${s.teacherName} (Live in progress — scan QR above)`
-            : `Instructor: ${s.teacherName} (Class ended at ${s.timeString})`;
+            ? `Instructor: ${s.teacherName} (Class live now — click Verify Face & Scan above)`
+            : `Instructor: ${s.teacherName} (Ended at ${s.timeString})`;
 
         return `
-          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.75rem;box-shadow:0 2px 8px rgba(0,0,0,0.2);">
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.75rem;">
             <div class="flex items-center justify-between mb-1">
               <strong style="font-size:0.85rem;color:var(--text-primary);">${s.courseCode}</strong>
               ${badge}
             </div>
-            <div style="font-size:0.78rem;color:var(--text-secondary);font-weight:500;">${s.className}</div>
-            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;border-top:1px solid rgba(255,255,255,0.05);padding-top:0.3rem;">${meta}</div>
+            <div style="font-size:0.78rem;color:var(--text-secondary);">${s.className}</div>
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">${meta}</div>
           </div>`;
       }).join('');
     }
   }
-
-  // Re-highlight the selected day cell in grid
-  document.querySelectorAll('.cal-day-cell').forEach(cell => {
-    cell.classList.remove('selected-day');
-  });
 }
 
 // ── Subject Analytics & Attendance Synchronization ──────────────────────
@@ -743,7 +728,8 @@ window.resetScanner = resetScanner;
 window.submitManualToken = submitManualToken;
 window.loadAnalytics = loadAnalytics;
 window.changeCalMonth = changeCalMonth;
-window.jumpToCalMonth = jumpToCalMonth;
+window.resetToCurrentMonth = resetToCurrentMonth;
+window.selectCalendarDate = selectCalendarDate;
 window.renderSidePanelDayDetails = renderSidePanelDayDetails;
 window.logout = logout;
 
