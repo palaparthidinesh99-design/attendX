@@ -100,8 +100,8 @@ router.post('/face-profile', authenticate, requireRole('student'), async (req, r
   try {
     const { faceDescriptor } = req.body;
 
-    if (!Array.isArray(faceDescriptor) || faceDescriptor.length !== 512) {
-      return res.status(400).json({ error: 'Valid 512-element face descriptor array is required' });
+    if (!Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
+      return res.status(400).json({ error: 'Valid 128-element face descriptor array is required' });
     }
 
     const user = await User.findById(req.user._id);
@@ -128,7 +128,7 @@ router.get('/face-profile', authenticate, requireRole('student'), async (req, re
     if (!user) return res.status(404).json({ error: 'User not found' });
 
     res.json({
-      hasFaceProfile: Array.isArray(user.faceDescriptor) && user.faceDescriptor.length === 512,
+      hasFaceProfile: Array.isArray(user.faceDescriptor) && user.faceDescriptor.length === 128,
       faceProfileLocked: !!user.faceProfileLocked,
       faceDescriptor: user.faceDescriptor
     });

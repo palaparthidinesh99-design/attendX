@@ -72,123 +72,53 @@ async function checkFaceProfileStatus() {
   }
 }
 
-// ── High-Discriminability 512-D Multi-Scale LBP Face Descriptor ──────────
-// Samples pixel intensity patterns from 8 neighbours around 64 centre points
-// at 4 different sampling radii across the face-crop region only (40%-90% of frame).
-// This is far more discriminative than coarse cell histograms.
-function extractCanvasFaceVector(videoElement) {
-  const SIZE = 200;
-  const canvas = document.createElement('canvas');
-  canvas.width = SIZE;
-  canvas.height = SIZE;
-  const ctx = canvas.getContext('2d');
+// ── face-api.js Neural Net Face Recognition ───────────────────────────────
+// Uses: SSD MobileNet (detection) + 68-pt landmarks + ResNet128 (embedding)
+// Models are served locally from /models/ — no external calls at runtime.
+let faceApiReady = false;
 
-  // Crop to the central 80% of the frame (nose, eyes, mouth region)
-  const cropX = videoElement.videoWidth * 0.10;
-  const cropY = videoElement.videoHeight * 0.08;
-  const cropW = videoElement.videoWidth * 0.80;
-  const cropH = videoElement.videoHeight * 0.84;
-  ctx.drawImage(videoElement, cropX, cropY, cropW, cropH, 0, 0, SIZE, SIZE);
-
-  const imgData = ctx.getImageData(0, 0, SIZE, SIZE);
-  const pixels = imgData.data;
-
-  // Convert to greyscale luminance map
-  const grey = new Float32Array(SIZE * SIZE);
-  for (let i = 0; i < SIZE * SIZE; i++) {
-    const idx = i * 4;
-    grey[i] = 0.299 * pixels[idx] + 0.587 * pixels[idx + 1] + 0.114 * pixels[idx + 2];
+async function loadFaceApiModels() {
+  if (faceApiReady) return;
+  try {
+    const MODEL_URL = '/models';
+    await Promise.all([
+      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+    ]);
+    faceApiReady = true;
+    console.log('face-api.js models loaded ✓');
+  } catch (err) {
+    console.error('Failed to load face-api models:', err);
   }
-
-  // Helper: bilinear-sampled grey value at fractional coords
-  function sampleGrey(x, y) {
-    const xi = Math.max(0, Math.min(SIZE - 2, Math.floor(x)));
-    const yi = Math.max(0, Math.min(SIZE - 2, Math.floor(y)));
-    const xf = x - xi;
-    const yf = y - yi;
-    return (
-      grey[yi * SIZE + xi] * (1 - xf) * (1 - yf) +
-      grey[yi * SIZE + xi + 1] * xf * (1 - yf) +
-      grey[(yi + 1) * SIZE + xi] * (1 - xf) * yf +
-      grey[(yi + 1) * SIZE + xi + 1] * xf * yf
-    );
-  }
-
-  const vector = [];
-
-  // 4 sampling radii × 8 uniform angles = 32 features per sample point
-  // 16 × 16 = 256 centre points in the face-crop grid → 256 × 2 = 512-D vector
-  const RADII = [2, 4, 7, 11];
-  const ANGLES = 8;
-  const GRID = 16;
-  const STEP = SIZE / GRID;
-
-  for (let gy = 0; gy < GRID; gy++) {
-    for (let gx = 0; gx < GRID; gx++) {
-      const cx = (gx + 0.5) * STEP;
-      const cy = (gy + 0.5) * STEP;
-      const centre = sampleGrey(cx, cy);
-
-      // LBP descriptor: for each radius, encode 8-bit pattern
-      let lbpSum = 0;
-      let gradSum = 0;
-
-      for (let ri = 0; ri < RADII.length; ri++) {
-        const r = RADII[ri];
-        let lbpCode = 0;
-        let gradMag = 0;
-        for (let a = 0; a < ANGLES; a++) {
-          const angle = (2 * Math.PI * a) / ANGLES;
-          const nx = cx + r * Math.cos(angle);
-          const ny = cy + r * Math.sin(angle);
-          const nv = sampleGrey(nx, ny);
-          if (nv >= centre) lbpCode |= (1 << a);
-          gradMag += Math.abs(nv - centre);
-        }
-        lbpSum += lbpCode / 255.0;
-        gradSum += gradMag / (ANGLES * 255.0);
-      }
-
-      vector.push(lbpSum / RADII.length);
-      vector.push(gradSum / RADII.length);
-    }
-  }
-
-  // L2-normalise the 512-D vector
-  const mag = Math.sqrt(vector.reduce((s, v) => s + v * v, 0)) || 1;
-  return vector.map(v => Number((v / mag).toFixed(6)));
 }
 
-// Average multiple frames to produce a stable enrolment descriptor
-async function extractAveragedFaceVector(videoElement, numFrames = 5, delayMs = 120) {
-  const vectors = [];
-  for (let i = 0; i < numFrames; i++) {
-    vectors.push(extractCanvasFaceVector(videoElement));
-    if (i < numFrames - 1) await new Promise(r => setTimeout(r, delayMs));
-  }
-  const len = vectors[0].length;
-  const avg = new Array(len).fill(0);
-  for (const v of vectors) v.forEach((val, i) => { avg[i] += val; });
-  const sumVec = avg.map(v => v / numFrames);
-  const mag = Math.sqrt(sumVec.reduce((s, v) => s + v * v, 0)) || 1;
-  return sumVec.map(v => Number((v / mag).toFixed(6)));
+// Call once immediately so models are warm before user needs them
+loadFaceApiModels();
+
+// Extract a 128-D neural face embedding from a video element.
+// Returns Float32Array(128) or null if no face detected.
+async function extractFaceDescriptor(videoElement) {
+  if (!faceApiReady) await loadFaceApiModels();
+  const detection = await faceapi
+    .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
+    .withFaceLandmarks()
+    .withFaceDescriptor();
+  if (!detection) return null;
+  return Array.from(detection.descriptor); // Float32Array → plain array for JSON
 }
 
-function computeVectorSimilarity(vecA, vecB) {
-  if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dot += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
-    normB += vecB[i] * vecB[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+// Euclidean distance between two 128-D descriptors.
+// face-api.js standard: distance < 0.45 = same person, > 0.6 = different person.
+function faceDistance(descA, descB) {
+  if (!descA || !descB || descA.length !== descB.length) return 999;
+  let sum = 0;
+  for (let i = 0; i < descA.length; i++) sum += (descA[i] - descB[i]) ** 2;
+  return Math.sqrt(sum);
 }
 
-// Minimum cosine similarity to accept a face match.
-// Canvas-based LBP gives same-person scores of ~82-86%, so 0.78 is the realistic minimum.
-const FACE_MATCH_THRESHOLD = 0.78;
+// Match threshold: < 0.45 euclidean distance = confirmed match
+const FACE_MATCH_THRESHOLD = 0.45;
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
@@ -230,10 +160,21 @@ async function captureAndSaveFaceProfile() {
   }
 
   btn.disabled = true;
-  btn.textContent = 'Capturing 5 frames for stable profile…';
+  btn.textContent = 'Detecting face…';
 
   try {
-    const faceDescriptor = await extractAveragedFaceVector(video, 5, 150);
+    if (!faceApiReady) {
+      if (statusEl) statusEl.innerHTML = '<div class="alert alert-info mt-1">Loading face recognition models… please wait.</div>';
+      await loadFaceApiModels();
+    }
+
+    if (statusEl) statusEl.innerHTML = '<div class="alert alert-info mt-1">📸 Analysing your face — look directly at camera…</div>';
+    const faceDescriptor = await extractFaceDescriptor(video);
+
+    if (!faceDescriptor) {
+      if (statusEl) statusEl.innerHTML = '<div class="alert alert-warning mt-1">⚠️ No face detected. Ensure your face is centred, well-lit, and clearly visible.</div>';
+      return;
+    }
 
     const res = await fetch(`${API}/api/auth/face-profile`, {
       method: 'POST',
@@ -314,90 +255,67 @@ async function startBiometricScanWorkflow() {
     return;
   }
 
-  let prevFrameData = null;
-  let motionAccumulator = 0;
   let startTime = Date.now();
-
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = 80;
-  tempCanvas.height = 60;
-  const tempCtx = tempCanvas.getContext('2d');
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 12000) {
-      subtextEl.textContent = '⚠️ Biometric check timed out. Click Try Again below.';
+    if (Date.now() - startTime > 20000) {
+      subtextEl.textContent = '⚠️ Timed out. Click Try Again.';
       setScanStatus('Biometric verification timed out.', 'error');
       cleanupVerificationView();
+      document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
       return;
     }
 
+    // Run face detection on the live video
     if (video.videoWidth > 0) {
-      tempCtx.drawImage(video, 0, 0, 80, 60);
-      const currFrameData = tempCtx.getImageData(0, 0, 80, 60).data;
+      try {
+        const descriptor = await extractFaceDescriptor(video);
 
-      if (prevFrameData) {
-        let delta = 0;
-        for (let i = 0; i < currFrameData.length; i += 4) {
-          delta += Math.abs(currFrameData[i] - prevFrameData[i]);
-        }
-        const frameMotion = delta / (80 * 60);
-
-        if (frameMotion > 5.0) {
-          motionAccumulator += frameMotion;
-        }
-
-        if (motionAccumulator > 12.0) {
-          promptEl.textContent = '🔍 Verifying facial identity…';
+        if (!descriptor) {
+          // No face in frame yet — keep polling
+          promptEl.textContent = '👤 Centre your face in the camera…';
           promptEl.style.color = '#fbbf24';
+        } else {
+          // Face detected — compare with enrolled profile
+          const dist = faceDistance(userFaceProfile, descriptor);
 
-          // Sample 5 frames over 600ms and average — gives a stable descriptor
-          // that smooths out per-frame lighting noise.
-          const frames = [extractCanvasFaceVector(video)];
-          for (let f = 1; f < 5; f++) {
-            await new Promise(r => setTimeout(r, 120));
-            frames.push(extractCanvasFaceVector(video));
-          }
-          const sims = frames.map(v => computeVectorSimilarity(userFaceProfile, v));
-          const similarity = sims.reduce((a, b) => a + b, 0) / sims.length;
-
-          if (similarity >= FACE_MATCH_THRESHOLD) {
+          if (dist < FACE_MATCH_THRESHOLD) {
             promptEl.textContent = '✓ Face Verified!';
             promptEl.style.color = '#4ade80';
-            subtextEl.textContent = `✓ Biometric Verified (${Math.round(similarity * 100)}% match). Step 2: Scan QR Code.`;
+            subtextEl.textContent = `✓ Biometric confirmed (distance: ${dist.toFixed(3)}). Step 2: Scan QR Code.`;
             setTimeout(() => {
               cleanupVerificationView();
               openQRScannerCamera();
             }, 800);
             return;
           } else {
-            // Give the user more attempts — reset accumulator instead of hard-failing
+            // Face detected but doesn't match
             verificationAttempts++;
-            if (verificationAttempts >= 4) {
-              // Only hard-fail after 4 consecutive failed attempts
+            if (verificationAttempts >= 5) {
               promptEl.textContent = '❌ Face Not Recognised!';
               promptEl.style.color = '#f87171';
-              subtextEl.textContent = `Score: ${Math.round(similarity * 100)}% (need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Try re-enrolling your face profile in better lighting.`;
-              setScanStatus(`Biometric failed after 4 attempts — ${Math.round(similarity * 100)}% match. Re-register your face profile if this persists.`, 'error');
+              subtextEl.textContent = `Not your registered face (distance: ${dist.toFixed(3)}, need < ${FACE_MATCH_THRESHOLD}). Re-enroll if this persists.`;
+              setScanStatus('Biometric rejected — face does not match enrolled profile.', 'error');
               cleanupVerificationView();
               document.getElementById('scan-prompt').classList.remove('hidden');
               isProcessing = false;
               return;
             } else {
-              // Soft fail — show feedback, reset motion and let them try again naturally
-              promptEl.textContent = `⚠️ ${Math.round(similarity * 100)}% — Hold still and face the camera squarely (attempt ${verificationAttempts}/4)`;
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/5) — hold still…`;
               promptEl.style.color = '#fbbf24';
-              subtextEl.textContent = 'Move slightly then hold steady to retry.';
-              motionAccumulator = 0; // reset so they trigger a new liveness check
             }
           }
         }
+      } catch (e) {
+        console.warn('face-api detection error:', e);
       }
-      prevFrameData = currFrameData;
     }
 
+    // Poll every 600ms
+    await new Promise(r => setTimeout(r, 600));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
