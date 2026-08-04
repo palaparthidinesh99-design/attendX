@@ -29,7 +29,7 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  // Facial recognition 128-dimensional Float32 vector descriptor
+  // Facial recognition 512-dimensional LBP+gradient descriptor
   faceDescriptor: {
     type: [Number],
     default: undefined
