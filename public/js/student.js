@@ -107,45 +107,8 @@ window.addEventListener('load', () => {
 });
 
 // Extract a 128-D neural face embedding from a video element.
-// Calculate 3D Head Yaw Ratio from 68 facial landmarks (0.50 = straight, >0.57 = right, <0.43 = left)
-function calculateHeadYawRatio(landmarks) {
-  if (!landmarks) return 0.50;
-  const jaw = landmarks.getJawOutline();
-  const nose = landmarks.getNose();
-  if (!jaw || jaw.length < 17 || !nose || nose.length < 4) return 0.50;
-
-  const leftJaw = jaw[0];
-  const rightJaw = jaw[16];
-  const noseTip = nose[3];
-
-  const faceWidth = rightJaw.x - leftJaw.x;
-  if (faceWidth <= 0) return 0.50;
-
-  return (noseTip.x - leftJaw.x) / faceWidth;
-}
-
-// Calculate 3D Head Pitch Ratio from 68 facial landmarks (0.40 = straight, <0.28 = UP, >0.52 = DOWN)
-function calculateHeadPitchRatio(landmarks) {
-  if (!landmarks) return 0.40;
-  const nose = landmarks.getNose();
-  const jaw = landmarks.getJawOutline();
-  const leftEye = landmarks.getLeftEye();
-  const rightEye = landmarks.getRightEye();
-
-  if (!nose || nose.length < 4 || !jaw || jaw.length < 9 || !leftEye || !rightEye) return 0.40;
-
-  const noseTip = nose[3];
-  const chin = jaw[8];
-  const eyeCenterY = (leftEye[0].y + rightEye[3].y) / 2;
-
-  const faceHeight = chin.y - eyeCenterY;
-  if (faceHeight <= 0) return 0.40;
-
-  return (noseTip.y - eyeCenterY) / faceHeight;
-}
-
-// Extract face descriptor AND 3D head yaw/pitch ratios for interactive liveness challenge
-async function extractFaceDetails(videoElement) {
+// Extract Float32Array → Array descriptor
+async function extractFaceDescriptor(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
     .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
@@ -153,20 +116,7 @@ async function extractFaceDetails(videoElement) {
     .withFaceDescriptor();
   if (!detection) return null;
 
-  const yawRatio = calculateHeadYawRatio(detection.landmarks);
-  const pitchRatio = calculateHeadPitchRatio(detection.landmarks);
-
-  return {
-    descriptor: Array.from(detection.descriptor),
-    yawRatio,
-    pitchRatio
-  };
-}
-
-// Extract Float32Array → Array descriptor
-async function extractFaceDescriptor(videoElement) {
-  const details = await extractFaceDetails(videoElement);
-  return details ? details.descriptor : null;
+  return Array.from(detection.descriptor);
 }
 
 // Euclidean distance between two 128-D descriptors.
@@ -286,43 +236,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── WebAuthn Hardware Biometrics (Fingerprint / Touch ID / Face ID) ──────
-async function startWebAuthnBiometricScan() {
-  if (!window.PublicKeyCredential) {
-    alert('Hardware fingerprint / Touch ID is not supported on this browser. Use camera face verification.');
-    return;
-  }
-
-  setScanStatus('🖐️ Touch Fingerprint / Touch ID sensor on your device…', 'info');
-
-  try {
-    const challenge = new Uint8Array(32);
-    window.crypto.getRandomValues(challenge);
-
-    // Request native OS hardware biometric verification (Touch ID, Fingerprint, Face ID, Windows Hello)
-    const credential = await navigator.credentials.get({
-      publicKey: {
-        challenge,
-        timeout: 60000,
-        userVerification: 'required'
-      }
-    });
-
-    if (credential) {
-      setScanStatus('✓ Hardware Biometric Verified! Opening QR scanner…', 'info');
-      setTimeout(async () => {
-        await openQRScannerCamera();
-      }, 400);
-    }
-  } catch (err) {
-    if (err.name !== 'NotAllowedError') {
-      console.warn('WebAuthn error:', err);
-    }
-    setScanStatus('Fingerprint verification cancelled. Tap button to retry or use Face Scan.', 'warning');
-  }
-}
-
-// ── STEP 1: Face-First Scan Workflow (Biometric Face Verification) ──
+// ── STEP 1: Face-First Scan Workflow (Fast Neural Face Verification) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -339,9 +253,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👤 Look at camera for facial verification…';
+  promptEl.textContent = '👤 Look at the camera to verify identity…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Matching live face against registered profile…';
+  subtextEl.textContent = 'Analyzing neural face descriptor…';
 
   const video = document.getElementById('face-video');
   try {
@@ -356,11 +270,12 @@ async function startBiometricScanWorkflow() {
 
   let startTime = Date.now();
   let verificationAttempts = 0;
+  let matchCount = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 25000) {
+    if (Date.now() - startTime > 20000) {
       subtextEl.textContent = '⚠️ Timed out. Click Try Again.';
       setScanStatus('Biometric verification timed out.', 'error');
       cleanupVerificationView();
@@ -371,25 +286,30 @@ async function startBiometricScanWorkflow() {
 
     if (video.videoWidth > 0) {
       try {
-        const details = await extractFaceDetails(video);
+        const descriptor = await extractFaceDescriptor(video);
 
-        if (!details) {
-          promptEl.textContent = '👤 Position your face in camera frame…';
+        if (!descriptor) {
+          promptEl.textContent = '👤 Position your face in camera…';
           promptEl.style.color = '#fbbf24';
+          matchCount = 0;
         } else {
-          const { descriptor } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
           if (dist < FACE_MATCH_THRESHOLD) {
+            matchCount++;
             promptEl.textContent = '✓ Face Verified!';
             promptEl.style.color = '#4ade80';
-            subtextEl.textContent = 'Identity verified. Opening QR scanner…';
-            setTimeout(async () => {
-              cleanupVerificationView();
-              await openQRScannerCamera();
-            }, 400);
-            return;
+            subtextEl.textContent = 'Identity confirmed. Opening QR scanner…';
+            
+            if (matchCount >= 2) {
+              setTimeout(async () => {
+                cleanupVerificationView();
+                await openQRScannerCamera();
+              }, 400);
+              return;
+            }
           } else {
+            matchCount = 0;
             verificationAttempts++;
             if (verificationAttempts >= 8) {
               promptEl.textContent = '❌ Face Not Recognised!';
@@ -401,7 +321,7 @@ async function startBiometricScanWorkflow() {
               isProcessing = false;
               return;
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/8) — face camera…`;
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/8) — hold still…`;
               promptEl.style.color = '#fbbf24';
             }
           }
@@ -832,7 +752,6 @@ window.openFaceEnrollmentModal = openFaceEnrollmentModal;
 window.closeFaceEnrollmentModal = closeFaceEnrollmentModal;
 window.captureAndSaveFaceProfile = captureAndSaveFaceProfile;
 window.startBiometricScanWorkflow = startBiometricScanWorkflow;
-window.startWebAuthnBiometricScan = startWebAuthnBiometricScan;
 window.flipFaceCamera = flipFaceCamera;
 window.flipQRCamera = flipQRCamera;
 window.flipEnrollCamera = flipEnrollCamera;
@@ -851,7 +770,6 @@ function bindStudentEventListeners() {
   document.getElementById('btn-close-enroll-face-modal')?.addEventListener('click', closeFaceEnrollmentModal);
   document.getElementById('btn-cancel-enroll-face-modal')?.addEventListener('click', closeFaceEnrollmentModal);
   document.getElementById('capture-face-btn')?.addEventListener('click', captureAndSaveFaceProfile);
-  document.getElementById('btn-start-fingerprint-scan')?.addEventListener('click', startWebAuthnBiometricScan);
   document.getElementById('btn-start-biometric-scan')?.addEventListener('click', startBiometricScanWorkflow);
   document.getElementById('btn-flip-face-camera')?.addEventListener('click', flipFaceCamera);
   document.getElementById('btn-flip-qr-camera')?.addEventListener('click', flipQRCamera);
