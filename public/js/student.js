@@ -107,19 +107,47 @@ window.addEventListener('load', () => {
 });
 
 // Extract a 128-D neural face embedding from a video element.
-// Returns Float32Array(128) or null if no face detected.
-async function extractFaceDescriptor(videoElement) {
+// Calculate Eye Aspect Ratio (EAR) from 6 eye landmark points
+function getEyeEAR(eyePoints) {
+  if (!eyePoints || eyePoints.length < 6) return 0.3;
+  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+  const v1 = dist(eyePoints[1], eyePoints[5]);
+  const v2 = dist(eyePoints[2], eyePoints[4]);
+  const h = dist(eyePoints[0], eyePoints[3]);
+  if (h === 0) return 0.3;
+  return (v1 + v2) / (2.0 * h);
+}
+
+// Extract face descriptor AND 68-point landmarks for liveness & anti-spoofing
+async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
     .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
     .withFaceLandmarks()
     .withFaceDescriptor();
   if (!detection) return null;
-  return Array.from(detection.descriptor); // Float32Array → plain array for JSON
+
+  const leftEye = detection.landmarks.getLeftEye();
+  const rightEye = detection.landmarks.getRightEye();
+  const nose = detection.landmarks.getNose();
+  const leftEAR = getEyeEAR(leftEye);
+  const rightEAR = getEyeEAR(rightEye);
+  const avgEAR = (leftEAR + rightEAR) / 2.0;
+
+  return {
+    descriptor: Array.from(detection.descriptor),
+    avgEAR,
+    noseTip: nose && nose.length > 3 ? { x: nose[3].x, y: nose[3].y } : null
+  };
+}
+
+// Extract Float32Array → Array descriptor
+async function extractFaceDescriptor(videoElement) {
+  const details = await extractFaceDetails(videoElement);
+  return details ? details.descriptor : null;
 }
 
 // Euclidean distance between two 128-D descriptors.
-// face-api.js standard: distance < 0.45 = same person, > 0.6 = different person.
 function faceDistance(descA, descB) {
   if (!descA || !descB || descA.length !== descB.length) return 999;
   let sum = 0;
@@ -128,7 +156,6 @@ function faceDistance(descA, descB) {
 }
 
 // Match threshold: euclidean distance < 0.55 = same person
-// face-api.js recommended: 0.5–0.6 for browser cameras (0.45 is too strict)
 const FACE_MATCH_THRESHOLD = 0.55;
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
@@ -237,7 +264,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Verify Face BEFORE QR Code Scan) ──
+// ── STEP 1: Face-First Scan Workflow (Verify Live Face BEFORE QR Code Scan) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -254,9 +281,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👤 Step 1: Position face in camera';
+  promptEl.textContent = '👁️ Blink your eyes to verify live presence…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Verifying your face against your registered profile…';
+  subtextEl.textContent = 'Please blink once naturally to prove live presence (photo anti-spoofing active)…';
 
   const video = document.getElementById('face-video');
   try {
@@ -270,11 +297,16 @@ async function startBiometricScanWorkflow() {
   }
 
   let startTime = Date.now();
+  let hasBlinkedClosed = false;
+  let blinkVerified = false;
+  let prevNosePos = null;
+  let staticFrameCount = 0;
+  let verificationAttempts = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 20000) {
+    if (Date.now() - startTime > 25000) {
       subtextEl.textContent = '⚠️ Timed out. Click Try Again.';
       setScanStatus('Biometric verification timed out.', 'error');
       cleanupVerificationView();
@@ -286,20 +318,48 @@ async function startBiometricScanWorkflow() {
     // Run face detection on the live video
     if (video.videoWidth > 0) {
       try {
-        const descriptor = await extractFaceDescriptor(video);
+        const details = await extractFaceDetails(video);
 
-        if (!descriptor) {
+        if (!details) {
           // No face in frame yet — keep polling
           promptEl.textContent = '👤 Position your face in the camera…';
           promptEl.style.color = '#fbbf24';
         } else {
-          // Face detected — compare with enrolled profile
+          const { descriptor, avgEAR, noseTip } = details;
+
+          // 1. Anti-Photo Liveness Check: Detect Eye Blink (EAR < 0.21 closed, >= 0.24 open)
+          if (avgEAR < 0.21) {
+            hasBlinkedClosed = true;
+          } else if (hasBlinkedClosed && avgEAR >= 0.24) {
+            blinkVerified = true;
+          }
+
+          // 2. Anti-Photo Liveness Check: Detect Static Photo Frame (0 movement)
+          if (noseTip && prevNosePos) {
+            const movement = Math.hypot(noseTip.x - prevNosePos.x, noseTip.y - prevNosePos.y);
+            if (movement < 0.05) {
+              staticFrameCount++;
+            } else {
+              staticFrameCount = Math.max(0, staticFrameCount - 1);
+            }
+          }
+          if (noseTip) prevNosePos = noseTip;
+
+          // 3. Face Matching
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          if (dist < FACE_MATCH_THRESHOLD) {
-            promptEl.textContent = '✓ Face Verified!';
+          if (staticFrameCount > 12 && !blinkVerified) {
+            promptEl.textContent = '⚠️ Photo detected — please present your live face';
+            promptEl.style.color = '#f87171';
+            subtextEl.textContent = 'Static photo detected. Please blink your eyes naturally to verify liveness.';
+          } else if (!blinkVerified) {
+            promptEl.textContent = '👁️ Blink your eyes to verify live presence…';
+            promptEl.style.color = '#fbbf24';
+            subtextEl.textContent = 'A short eye-blink is required to prevent photo spoofing.';
+          } else if (dist < FACE_MATCH_THRESHOLD) {
+            promptEl.textContent = '✓ Live Face Verified!';
             promptEl.style.color = '#4ade80';
-            subtextEl.textContent = 'Identity verified. Opening QR scanner…';
+            subtextEl.textContent = 'Liveness & identity confirmed. Opening QR scanner…';
             setTimeout(async () => {
               cleanupVerificationView();
               await openQRScannerCamera();
@@ -328,12 +388,11 @@ async function startBiometricScanWorkflow() {
       }
     }
 
-    // Poll every 600ms
-    await new Promise(r => setTimeout(r, 600));
+    // Fast polling (250ms) for instant blink detection
+    await new Promise(r => setTimeout(r, 250));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
-  let verificationAttempts = 0;
   livenessLoopId = requestAnimationFrame(checkFrame);
 }
 
