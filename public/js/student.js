@@ -220,20 +220,20 @@ async function captureAndSaveFaceProfile() {
 let faceFacingMode = 'user';
 let qrFacingMode = 'environment';
 
-function flipFaceCamera() {
+async function flipFaceCamera() {
   faceFacingMode = faceFacingMode === 'user' ? 'environment' : 'user';
-  stopCameraStream();
+  await stopCameraStream();
   startBiometricScanWorkflow();
 }
 
-function flipQRCamera() {
+async function flipQRCamera() {
   qrFacingMode = qrFacingMode === 'user' ? 'environment' : 'user';
-  openQRScannerCamera();
+  await openQRScannerCamera();
 }
 
-function flipEnrollCamera() {
+async function flipEnrollCamera() {
   faceFacingMode = faceFacingMode === 'user' ? 'environment' : 'user';
-  stopCameraStream();
+  await stopCameraStream();
   startEnrollCamera();
 }
 
@@ -244,6 +244,9 @@ async function startBiometricScanWorkflow() {
     return;
   }
 
+  await stopCameraStream();
+  await new Promise(r => setTimeout(r, 100));
+
   document.getElementById('scan-prompt').classList.add('hidden');
   document.getElementById('face-verification-view').classList.remove('hidden');
   document.getElementById('qr-reader-container').classList.add('hidden');
@@ -251,9 +254,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👁️ Step 1: Blink or Nod to verify face';
+  promptEl.textContent = '👤 Step 1: Position face in camera';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Verifying live biometric match against locked profile…';
+  subtextEl.textContent = 'Verifying your face against your registered profile…';
 
   const video = document.getElementById('face-video');
   try {
@@ -287,7 +290,7 @@ async function startBiometricScanWorkflow() {
 
         if (!descriptor) {
           // No face in frame yet — keep polling
-          promptEl.textContent = '👤 Centre your face in the camera…';
+          promptEl.textContent = '👤 Position your face in the camera…';
           promptEl.style.color = '#fbbf24';
         } else {
           // Face detected — compare with enrolled profile
@@ -296,11 +299,11 @@ async function startBiometricScanWorkflow() {
           if (dist < FACE_MATCH_THRESHOLD) {
             promptEl.textContent = '✓ Face Verified!';
             promptEl.style.color = '#4ade80';
-            subtextEl.textContent = `✓ Biometric confirmed (distance: ${dist.toFixed(3)}). Step 2: Scan QR Code.`;
-            setTimeout(() => {
+            subtextEl.textContent = 'Identity verified. Opening QR scanner…';
+            setTimeout(async () => {
               cleanupVerificationView();
-              openQRScannerCamera();
-            }, 800);
+              await openQRScannerCamera();
+            }, 600);
             return;
           } else {
             // Face detected but doesn't match
@@ -308,8 +311,8 @@ async function startBiometricScanWorkflow() {
             if (verificationAttempts >= 5) {
               promptEl.textContent = '❌ Face Not Recognised!';
               promptEl.style.color = '#f87171';
-              subtextEl.textContent = `Not your registered face (distance: ${dist.toFixed(3)}, need < ${FACE_MATCH_THRESHOLD}). Re-enroll if this persists.`;
-              setScanStatus('Biometric rejected — face does not match enrolled profile.', 'error');
+              subtextEl.textContent = 'Biometric mismatch. Face does not match registered profile.';
+              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
               cleanupVerificationView();
               document.getElementById('scan-prompt').classList.remove('hidden');
               isProcessing = false;
@@ -335,17 +338,15 @@ async function startBiometricScanWorkflow() {
 }
 
 // ── STEP 2: Open Camera QR Scanner (Triggered ONLY after Face Match) ───
-function openQRScannerCamera() {
+async function openQRScannerCamera() {
+  await stopCameraStream();
+  await new Promise(r => setTimeout(r, 100));
+
   document.getElementById('scan-prompt').classList.add('hidden');
   document.getElementById('face-verification-view').classList.add('hidden');
   document.getElementById('qr-reader-container').classList.remove('hidden');
 
   setScanStatus('📷 Point camera at teacher\'s rotating QR code', 'info');
-
-  if (html5QrCode) {
-    try { html5QrCode.stop(); } catch (_) {}
-    html5QrCode = null;
-  }
 
   html5QrCode = new Html5Qrcode('qr-reader');
   const config = { fps: 10, qrbox: { width: 220, height: 220 }, aspectRatio: 1.0 };
@@ -365,7 +366,7 @@ async function onQRDecoded(decodedText) {
   if (isProcessing) return;
   isProcessing = true;
 
-  try { await html5QrCode.stop(); } catch (_) {}
+  await stopCameraStream();
 
   let payload;
   try {
@@ -384,7 +385,7 @@ async function onQRDecoded(decodedText) {
     return;
   }
 
-  setScanStatus('📍 Requesting hardware GPS location & submitting check-in…', 'info');
+  setScanStatus('📍 Requesting GPS location & submitting check-in…', 'info');
 
   navigator.geolocation.getCurrentPosition(
     async (pos) => {
@@ -404,11 +405,42 @@ function cleanupVerificationView() {
   document.getElementById('face-verification-view')?.classList.add('hidden');
 }
 
-function stopCameraStream() {
+async function stopCameraStream() {
   if (activeStream) {
-    activeStream.getTracks().forEach(t => t.stop());
+    try {
+      activeStream.getTracks().forEach(t => t.stop());
+    } catch (_) {}
     activeStream = null;
   }
+
+  const faceVideo = document.getElementById('face-video');
+  if (faceVideo && faceVideo.srcObject) {
+    try { faceVideo.srcObject.getTracks().forEach(t => t.stop()); } catch (_) {}
+    faceVideo.srcObject = null;
+  }
+
+  const enrollVideo = document.getElementById('enroll-video');
+  if (enrollVideo && enrollVideo.srcObject) {
+    try { enrollVideo.srcObject.getTracks().forEach(t => t.stop()); } catch (_) {}
+    enrollVideo.srcObject = null;
+  }
+
+  if (html5QrCode) {
+    try {
+      if (html5QrCode.isScanning) {
+        await html5QrCode.stop();
+      }
+      await html5QrCode.clear();
+    } catch (_) {}
+    html5QrCode = null;
+  }
+
+  document.querySelectorAll('#qr-reader video').forEach(v => {
+    if (v.srcObject) {
+      try { v.srcObject.getTracks().forEach(t => t.stop()); } catch (_) {}
+      v.srcObject = null;
+    }
+  });
 }
 
 // ── Submit Attendance Payload ───────────────────────────────────────────
@@ -450,6 +482,7 @@ async function submitAttendance(sessionId, token, lat, lng, accuracyMeters = nul
 function showSuccessView(data) {
   setScanStatus('', '');
   document.getElementById('qr-reader').classList.add('hidden');
+  document.getElementById('qr-reader-container')?.classList.add('hidden');
 
   const user = getUser();
   document.getElementById('success-detail').textContent =
@@ -468,18 +501,15 @@ function showSuccessView(data) {
   document.getElementById('success-view').classList.remove('hidden');
 }
 
-function resetScanner() {
+async function resetScanner() {
+  await stopCameraStream();
   document.getElementById('success-view').classList.add('hidden');
   document.getElementById('scan-prompt').classList.remove('hidden');
   document.getElementById('qr-reader').classList.add('hidden');
+  document.getElementById('qr-reader-container')?.classList.add('hidden');
   document.getElementById('face-verification-view').classList.add('hidden');
   setScanStatus('', '');
   isProcessing = false;
-  if (html5QrCode) {
-    try { html5QrCode.stop(); } catch (_) {}
-    html5QrCode = null;
-  }
-  stopCameraStream();
 }
 
 async function submitManualToken() {
