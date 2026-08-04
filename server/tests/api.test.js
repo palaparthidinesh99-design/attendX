@@ -148,7 +148,7 @@ async function runApiTests() {
       });
     assert('Duplicate scan returns 409 Conflict', duplicateScanRes.status === 409 && duplicateScanRes.body.error.includes('already marked'));
 
-    // Out-of-Radius Scan (Student 2 is ~490m away, beyond the 200m buffer)
+    // Out-of-Radius Scan (Student 2 is ~490m away, beyond the 50m buffer)
     const outOfRadiusScanRes = await request(app)
       .post('/api/attendance/scan')
       .set('Authorization', `Bearer ${student2Token}`)
@@ -159,7 +159,7 @@ async function runApiTests() {
         lng: 77.5946
       });
     assert('Out-of-radius scan returns 403 Forbidden with distance meters',
-      outOfRadiusScanRes.status === 403 && outOfRadiusScanRes.body.distanceMeters > 200);
+      outOfRadiusScanRes.status === 403 && outOfRadiusScanRes.body.distanceMeters > 50);
 
     // Tampered / Expired Token Scan
     const badTokenScanRes = await request(app)

@@ -59,13 +59,13 @@ router.post('/scan', authenticate, requireRole('student'), async (req, res, next
       session.location.lat, session.location.lng
     );
 
-    const deviceAccuracy = (accuracyMeters != null && !isNaN(parseFloat(accuracyMeters))) ? parseFloat(accuracyMeters) : 50;
-    const accuracyBuffer = Math.max(deviceAccuracy, 200); // 200m minimum buffer to handle Wi-Fi vs GPS accuracy gaps
+    const deviceAccuracy = (accuracyMeters != null && !isNaN(parseFloat(accuracyMeters))) ? parseFloat(accuracyMeters) : 25;
+    const accuracyBuffer = Math.min(Math.max(deviceAccuracy, 15), 50); // Tight 15m-50m buffer for GPS precision
     const allowedRadius = session.radiusMeters + accuracyBuffer;
 
     if (distanceMeters > allowedRadius) {
       return res.status(403).json({
-        error: `Outside allowed geofence (${Math.round(distanceMeters)}m away; max allowed is ${Math.round(allowedRadius)}m incl. ${Math.round(accuracyBuffer)}m location buffer)`,
+        error: `Outside allowed geofence (${Math.round(distanceMeters)}m away; allowed radius is ${Math.round(allowedRadius)}m incl. ${Math.round(accuracyBuffer)}m GPS buffer)`,
         distanceMeters: Math.round(distanceMeters),
         allowedRadius: Math.round(allowedRadius)
       });
