@@ -107,18 +107,24 @@ window.addEventListener('load', () => {
 });
 
 // Extract a 128-D neural face embedding from a video element.
-// Calculate Eye Aspect Ratio (EAR) from 6 eye landmark points
-function getEyeEAR(eyePoints) {
-  if (!eyePoints || eyePoints.length < 6) return 0.3;
-  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
-  const v1 = dist(eyePoints[1], eyePoints[5]);
-  const v2 = dist(eyePoints[2], eyePoints[4]);
-  const h = dist(eyePoints[0], eyePoints[3]);
-  if (h === 0) return 0.3;
-  return (v1 + v2) / (2.0 * h);
+// Calculate 3D Head Yaw Ratio from 68 facial landmarks (0.50 = straight, >0.58 = right, <0.42 = left)
+function calculateHeadYawRatio(landmarks) {
+  if (!landmarks) return 0.50;
+  const jaw = landmarks.getJawOutline();
+  const nose = landmarks.getNose();
+  if (!jaw || jaw.length < 17 || !nose || nose.length < 4) return 0.50;
+
+  const leftJaw = jaw[0];     // Left face boundary
+  const rightJaw = jaw[16];   // Right face boundary
+  const noseTip = nose[3];    // Nose tip
+
+  const faceWidth = rightJaw.x - leftJaw.x;
+  if (faceWidth <= 0) return 0.50;
+
+  return (noseTip.x - leftJaw.x) / faceWidth;
 }
 
-// Extract face descriptor AND 68-point landmarks for liveness & anti-spoofing
+// Extract face descriptor AND 3D head yaw ratio for interactive liveness challenge
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
@@ -127,17 +133,11 @@ async function extractFaceDetails(videoElement) {
     .withFaceDescriptor();
   if (!detection) return null;
 
-  const leftEye = detection.landmarks.getLeftEye();
-  const rightEye = detection.landmarks.getRightEye();
-  const nose = detection.landmarks.getNose();
-  const leftEAR = getEyeEAR(leftEye);
-  const rightEAR = getEyeEAR(rightEye);
-  const avgEAR = (leftEAR + rightEAR) / 2.0;
+  const yawRatio = calculateHeadYawRatio(detection.landmarks);
 
   return {
     descriptor: Array.from(detection.descriptor),
-    avgEAR,
-    noseTip: nose && nose.length > 3 ? { x: nose[3].x, y: nose[3].y } : null
+    yawRatio
   };
 }
 
@@ -264,7 +264,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Verify Live Face BEFORE QR Code Scan) ──
+// ── STEP 1: Face-First Scan Workflow (Interactive Head Motion Challenge) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -281,9 +281,15 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👁️ Blink your eyes to verify live presence…';
+  // Randomly select Motion Challenge direction to prevent pre-recorded video / photo playback
+  const targetDirection = Math.random() > 0.5 ? 'RIGHT' : 'LEFT';
+  const challengeText = targetDirection === 'RIGHT'
+    ? '➡️ Turn head slightly to your RIGHT'
+    : '⬅️ Turn head slightly to your LEFT';
+
+  promptEl.textContent = challengeText;
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Please blink once naturally to prove live presence (photo anti-spoofing active)…';
+  subtextEl.textContent = `Randomised 3D motion challenge: ${challengeText} to verify live presence…`;
 
   const video = document.getElementById('face-video');
   try {
@@ -297,11 +303,8 @@ async function startBiometricScanWorkflow() {
   }
 
   let startTime = Date.now();
-  let hasBlinkedClosed = false;
-  let blinkVerified = false;
-  let prevNosePos = null;
-  let staticFrameCount = 0;
   let verificationAttempts = 0;
+  let motionPassed = false;
 
   async function checkFrame() {
     if (!activeStream) return;
@@ -315,60 +318,42 @@ async function startBiometricScanWorkflow() {
       return;
     }
 
-    // Run face detection on the live video
     if (video.videoWidth > 0) {
       try {
         const details = await extractFaceDetails(video);
 
         if (!details) {
-          // No face in frame yet — keep polling
           promptEl.textContent = '👤 Position your face in the camera…';
           promptEl.style.color = '#fbbf24';
         } else {
-          const { descriptor, avgEAR, noseTip } = details;
+          const { descriptor, yawRatio } = details;
 
-          // 1. Anti-Photo Liveness Check: Detect Eye Blink (EAR < 0.21 closed, >= 0.24 open)
-          if (avgEAR < 0.21) {
-            hasBlinkedClosed = true;
-          } else if (hasBlinkedClosed && avgEAR >= 0.24) {
-            blinkVerified = true;
-          }
-
-          // 2. Anti-Photo Liveness Check: Detect Static Photo Frame (0 movement)
-          if (noseTip && prevNosePos) {
-            const movement = Math.hypot(noseTip.x - prevNosePos.x, noseTip.y - prevNosePos.y);
-            if (movement < 0.05) {
-              staticFrameCount++;
-            } else {
-              staticFrameCount = Math.max(0, staticFrameCount - 1);
-            }
-          }
-          if (noseTip) prevNosePos = noseTip;
-
-          // 3. Face Matching
+          // 1. Verify Face Identity Descriptor
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          if (staticFrameCount > 12 && !blinkVerified) {
-            promptEl.textContent = '⚠️ Photo detected — please present your live face';
-            promptEl.style.color = '#f87171';
-            subtextEl.textContent = 'Static photo detected. Please blink your eyes naturally to verify liveness.';
-          } else if (!blinkVerified) {
-            promptEl.textContent = '👁️ Blink your eyes to verify live presence…';
+          // 2. Verify Dynamic 3D Head Turn Motion Challenge
+          if (targetDirection === 'RIGHT' && yawRatio > 0.57) {
+            motionPassed = true;
+          } else if (targetDirection === 'LEFT' && yawRatio < 0.43) {
+            motionPassed = true;
+          }
+
+          if (!motionPassed) {
+            promptEl.textContent = challengeText;
             promptEl.style.color = '#fbbf24';
-            subtextEl.textContent = 'A short eye-blink is required to prevent photo spoofing.';
+            subtextEl.textContent = 'Photo/Video anti-spoofing active: Turn your head as prompted above…';
           } else if (dist < FACE_MATCH_THRESHOLD) {
-            promptEl.textContent = '✓ Live Face Verified!';
+            promptEl.textContent = '✓ Live Motion & Face Verified!';
             promptEl.style.color = '#4ade80';
-            subtextEl.textContent = 'Liveness & identity confirmed. Opening QR scanner…';
+            subtextEl.textContent = 'Identity & 3D head motion verified. Opening QR scanner…';
             setTimeout(async () => {
               cleanupVerificationView();
               await openQRScannerCamera();
-            }, 600);
+            }, 500);
             return;
           } else {
-            // Face detected but doesn't match
             verificationAttempts++;
-            if (verificationAttempts >= 5) {
+            if (verificationAttempts >= 6) {
               promptEl.textContent = '❌ Face Not Recognised!';
               promptEl.style.color = '#f87171';
               subtextEl.textContent = 'Biometric mismatch. Face does not match registered profile.';
@@ -378,7 +363,7 @@ async function startBiometricScanWorkflow() {
               isProcessing = false;
               return;
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/5) — hold still…`;
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/6) — face camera squarely…`;
               promptEl.style.color = '#fbbf24';
             }
           }
@@ -388,8 +373,7 @@ async function startBiometricScanWorkflow() {
       }
     }
 
-    // Fast polling (250ms) for instant blink detection
-    await new Promise(r => setTimeout(r, 250));
+    await new Promise(r => setTimeout(r, 200));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
