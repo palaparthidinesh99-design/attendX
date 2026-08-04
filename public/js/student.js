@@ -76,10 +76,17 @@ async function checkFaceProfileStatus() {
 // Uses: SSD MobileNet (detection) + 68-pt landmarks + ResNet128 (embedding)
 // Models are served locally from /models/ — no external calls at runtime.
 let faceApiReady = false;
+let faceApiLoadPromise = null;
 
 async function loadFaceApiModels() {
   if (faceApiReady) return;
-  try {
+  // Prevent parallel load calls
+  if (faceApiLoadPromise) return faceApiLoadPromise;
+
+  faceApiLoadPromise = (async () => {
+    if (typeof faceapi === 'undefined') {
+      throw new Error('face-api.js CDN script did not load. Check your internet connection and refresh.');
+    }
     const MODEL_URL = '/models';
     await Promise.all([
       faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
@@ -88,13 +95,15 @@ async function loadFaceApiModels() {
     ]);
     faceApiReady = true;
     console.log('face-api.js models loaded ✓');
-  } catch (err) {
-    console.error('Failed to load face-api models:', err);
-  }
+  })();
+
+  return faceApiLoadPromise;
 }
 
-// Call once immediately so models are warm before user needs them
-loadFaceApiModels();
+// Warm up models as soon as the page is interactive
+window.addEventListener('load', () => {
+  loadFaceApiModels().catch(err => console.warn('Model preload failed:', err.message));
+});
 
 // Extract a 128-D neural face embedding from a video element.
 // Returns Float32Array(128) or null if no face detected.
@@ -198,8 +207,8 @@ async function captureAndSaveFaceProfile() {
       if (statusEl) statusEl.innerHTML = `<div class="alert alert-error mt-1">${data.error || 'Failed to save profile'}</div>`;
     }
   } catch (err) {
-    console.error(err);
-    if (statusEl) statusEl.innerHTML = '<div class="alert alert-error mt-1">Error capturing face profile</div>';
+    console.error('Face enrollment error:', err);
+    if (statusEl) statusEl.innerHTML = `<div class="alert alert-error mt-1">❌ Error: ${err.message || err}. Open DevTools console (F12) for details.</div>`;
   } finally {
     btn.disabled = false;
     btn.textContent = '📸 Capture & Lock Profile';
