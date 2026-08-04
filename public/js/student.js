@@ -186,8 +186,9 @@ function computeVectorSimilarity(vecA, vecB) {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Minimum cosine similarity to accept a face match (higher = stricter)
-const FACE_MATCH_THRESHOLD = 0.93;
+// Minimum cosine similarity to accept a face match.
+// Canvas-based LBP gives same-person scores of ~82-86%, so 0.78 is the realistic minimum.
+const FACE_MATCH_THRESHOLD = 0.78;
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
@@ -352,37 +353,45 @@ async function startBiometricScanWorkflow() {
           promptEl.textContent = '🔍 Verifying facial identity…';
           promptEl.style.color = '#fbbf24';
 
-          // Sample 3 frames spread over 300ms and average for robustness
-          const v1 = extractCanvasFaceVector(video);
-          await new Promise(r => setTimeout(r, 150));
-          const v2 = extractCanvasFaceVector(video);
-          await new Promise(r => setTimeout(r, 150));
-          const v3 = extractCanvasFaceVector(video);
-
-          const sim1 = computeVectorSimilarity(userFaceProfile, v1);
-          const sim2 = computeVectorSimilarity(userFaceProfile, v2);
-          const sim3 = computeVectorSimilarity(userFaceProfile, v3);
-          const similarity = (sim1 + sim2 + sim3) / 3;
+          // Sample 5 frames over 600ms and average — gives a stable descriptor
+          // that smooths out per-frame lighting noise.
+          const frames = [extractCanvasFaceVector(video)];
+          for (let f = 1; f < 5; f++) {
+            await new Promise(r => setTimeout(r, 120));
+            frames.push(extractCanvasFaceVector(video));
+          }
+          const sims = frames.map(v => computeVectorSimilarity(userFaceProfile, v));
+          const similarity = sims.reduce((a, b) => a + b, 0) / sims.length;
 
           if (similarity >= FACE_MATCH_THRESHOLD) {
             promptEl.textContent = '✓ Face Verified!';
             promptEl.style.color = '#4ade80';
             subtextEl.textContent = `✓ Biometric Verified (${Math.round(similarity * 100)}% match). Step 2: Scan QR Code.`;
-
             setTimeout(() => {
               cleanupVerificationView();
               openQRScannerCamera();
             }, 800);
             return;
           } else {
-            promptEl.textContent = '❌ Face Not Recognised!';
-            promptEl.style.color = '#f87171';
-            subtextEl.textContent = `Match score: ${Math.round(similarity * 100)}% (need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Face camera squarely in good lighting.`;
-            setScanStatus(`Biometric rejected — ${Math.round(similarity * 100)}% match (need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Ensure you are the registered student.`, 'error');
-            cleanupVerificationView();
-            document.getElementById('scan-prompt').classList.remove('hidden');
-            isProcessing = false;
-            return;
+            // Give the user more attempts — reset accumulator instead of hard-failing
+            verificationAttempts++;
+            if (verificationAttempts >= 4) {
+              // Only hard-fail after 4 consecutive failed attempts
+              promptEl.textContent = '❌ Face Not Recognised!';
+              promptEl.style.color = '#f87171';
+              subtextEl.textContent = `Score: ${Math.round(similarity * 100)}% (need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Try re-enrolling your face profile in better lighting.`;
+              setScanStatus(`Biometric failed after 4 attempts — ${Math.round(similarity * 100)}% match. Re-register your face profile if this persists.`, 'error');
+              cleanupVerificationView();
+              document.getElementById('scan-prompt').classList.remove('hidden');
+              isProcessing = false;
+              return;
+            } else {
+              // Soft fail — show feedback, reset motion and let them try again naturally
+              promptEl.textContent = `⚠️ ${Math.round(similarity * 100)}% — Hold still and face the camera squarely (attempt ${verificationAttempts}/4)`;
+              promptEl.style.color = '#fbbf24';
+              subtextEl.textContent = 'Move slightly then hold steady to retry.';
+              motionAccumulator = 0; // reset so they trigger a new liveness check
+            }
           }
         }
       }
@@ -392,6 +401,7 @@ async function startBiometricScanWorkflow() {
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
+  let verificationAttempts = 0;
   livenessLoopId = requestAnimationFrame(checkFrame);
 }
 
