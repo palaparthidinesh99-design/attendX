@@ -1,0 +1,38 @@
+{
+  "name": "attendence-proxy",
+  "version": "1.0.0",
+  "description": "Secure attendance system with rotating HMAC QR codes and GPS geofencing",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "nodemon server/server.js",
+    "test": "npm run test:unit && npm run test:api",
+    "test:unit": "node server/utils/token.test.js && node server/utils/geofence.test.js",
+    "test:api": "NODE_ENV=test node server/tests/api.test.js"
+  },
+  "keywords": [
+    "attendance",
+    "qr",
+    "geofence",
+    "HMAC",
+    "nodejs",
+    "express",
+    "mongodb"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "express-rate-limit": "^8.6.1",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.0",
+    "mongoose": "^7.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14",
+    "supertest": "^7.2.2"
+  }
+}

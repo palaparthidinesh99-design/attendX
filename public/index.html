@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AttendX — Secure Attendance System</title>
+  <meta name="description" content="Secure QR-based attendance system with rotating tokens and GPS geofencing. For teachers and students." />
+  <link rel="stylesheet" href="/css/style.css" />
+  <style>
+    .auth-page {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+    }
+
+    .auth-wrapper {
+      width: 100%;
+      max-width: 460px;
+    }
+
+    .auth-logo-section {
+      text-align: center;
+      margin-bottom: 2.5rem;
+    }
+
+    .auth-logo {
+      width: 64px;
+      height: 64px;
+      background: linear-gradient(135deg, #7c3aed 0%, #3b82f6 100%);
+      border-radius: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2rem;
+      margin-bottom: 1rem;
+      box-shadow: 0 0 40px rgba(124, 58, 237, 0.4);
+    }
+
+    .auth-logo-section h1 {
+      font-size: 2rem;
+      background: var(--gradient-primary);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .auth-logo-section p {
+      margin-top: 0.4rem;
+      font-size: 0.95rem;
+    }
+
+    .auth-card {
+      background: rgba(255, 255, 255, 0.03);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px;
+      padding: 2rem 2.25rem;
+      box-shadow: 0 4px 40px rgba(0, 0, 0, 0.5), 0 0 80px rgba(124, 58, 237, 0.08);
+    }
+
+    .features-strip {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.75rem;
+      margin-top: 2rem;
+    }
+
+    .feature-chip {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.85rem 0.5rem;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      text-align: center;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .feature-chip .icon { font-size: 1.4rem; }
+
+    #status-msg { margin-top: 1rem; }
+  </style>
+</head>
+<body class="page">
+  <div class="auth-page">
+    <div class="auth-wrapper animate-fade">
+      <div class="auth-logo-section">
+        <div class="auth-logo">🎯</div>
+        <h1>AttendX</h1>
+        <p>Secure attendance with rotating QR codes &amp; GPS verification</p>
+      </div>
+
+      <div class="auth-card">
+        <!-- Tab switcher -->
+        <div class="tabs mb-3" id="auth-tabs">
+          <button type="button" class="tab-btn active" id="tab-login">Sign In</button>
+          <button type="button" class="tab-btn" id="tab-register">Register</button>
+        </div>
+
+        <!-- Login Form -->
+        <form id="login-form">
+          <div class="form-group">
+            <label class="form-label" for="login-email">Email address</label>
+            <input class="form-input" type="email" id="login-email" placeholder="you@university.edu" autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="login-password">Password</label>
+            <input class="form-input" type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" />
+          </div>
+          <div id="login-status"></div>
+          <button type="submit" class="btn btn-primary btn-full btn-lg mt-2" id="login-btn">
+            Sign In
+          </button>
+        </form>
+
+        <!-- Register Form -->
+        <form id="register-form" class="hidden">
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label" for="reg-name">Full name</label>
+              <input class="form-input" type="text" id="reg-name" placeholder="Jane Smith" autocomplete="name" />
+            </div>
+            <div class="form-group">
+              <label class="form-label" for="reg-role">I am a</label>
+              <select class="form-select" id="reg-role">
+                <option value="student">Student</option>
+                <option value="teacher">Teacher</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-group" id="roll-group">
+            <label class="form-label" for="reg-roll">Roll number</label>
+            <input class="form-input" type="text" id="reg-roll" placeholder="e.g. CS21B001" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="reg-email">Email address</label>
+            <input class="form-input" type="email" id="reg-email" placeholder="you@university.edu" autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="reg-password">Password</label>
+            <input class="form-input" type="password" id="reg-password" placeholder="At least 6 characters" autocomplete="new-password" />
+          </div>
+          <div id="register-status"></div>
+          <button type="submit" class="btn btn-primary btn-full btn-lg mt-2" id="register-btn">
+            Create Account
+          </button>
+        </form>
+      </div>
+
+      <!-- Feature highlights -->
+      <div class="features-strip">
+        <div class="feature-chip">
+          <span class="icon">🔄</span>
+          Rotating QR
+        </div>
+        <div class="feature-chip">
+          <span class="icon">📍</span>
+          GPS Geofence
+        </div>
+        <div class="feature-chip">
+          <span class="icon">🛡️</span>
+          Anti-Proxy
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/auth.js"></script>
+</body>
+</html>

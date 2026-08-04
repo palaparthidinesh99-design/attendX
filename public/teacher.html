@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AttendX — Teacher Dashboard</title>
+  <meta name="description" content="Teacher dashboard — Course management, start session, rotating QR, live attendance, and CSV export." />
+  <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    .courses-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1.25rem;
+      margin-top: 1rem;
+    }
+
+    .course-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      padding: 1.25rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background-color 0.15s;
+    }
+
+    .course-card:hover {
+      border-color: var(--border-focus);
+      background: var(--bg-card-hover);
+    }
+
+    .teacher-session-layout {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      gap: 1.5rem;
+      align-items: start;
+    }
+
+    @media (max-width: 850px) {
+      .teacher-session-layout { grid-template-columns: 1fr; }
+    }
+
+    .qr-section { display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 1rem 0; }
+    .location-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+  </style>
+</head>
+<body class="page">
+  <!-- Navbar -->
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <div class="navbar-logo">🎯</div>
+      <span class="navbar-brand-name">Attend<span>X</span></span>
+    </a>
+    <div class="navbar-actions">
+      <div class="user-pill">
+        <span id="nav-name">Teacher</span>
+        <span class="role-badge teacher">Teacher</span>
+      </div>
+      <button class="btn btn-ghost btn-sm" id="logout-btn">Sign Out</button>
+    </div>
+  </nav>
+
+  <div class="page mt-2">
+    <div class="container">
+
+      <!-- VIEW 1: MY COURSES OVERVIEW -->
+      <div id="view-courses-list">
+        <div class="flex items-center justify-between mb-2">
+          <div>
+            <h2>My Courses</h2>
+            <p>Select a course to manage students or start an attendance session</p>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-create-course">+ Create New Course</button>
+        </div>
+
+        <div id="courses-grid-container" class="courses-grid">
+          <div class="empty-state" style="grid-column:1/-1;">
+            <p>Loading courses…</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIEW 2: SELECTED COURSE WORKSPACE -->
+      <div id="view-course-workspace" class="hidden">
+        <button type="button" class="btn btn-ghost btn-sm mb-2" id="btn-back-courses">← Back to All Courses</button>
+
+        <div class="teacher-session-layout">
+
+          <!-- LEFT: Course Controls & Start Session -->
+          <div class="card">
+            <div class="mb-2">
+              <span class="badge badge-purple" id="ws-course-code">CS101</span>
+              <h2 id="ws-course-name" style="margin-top:0.25rem;">Operating Systems</h2>
+              <p style="font-size:0.82rem;margin-top:0.15rem;">Manage roster &amp; launch session</p>
+            </div>
+
+            <!-- Start Session Controls -->
+            <div id="create-session-form" class="mt-2" style="border-top:1px solid var(--border);padding-top:1rem;">
+              <h3 style="margin-bottom:0.75rem;">▶ Launch Attendance Session</h3>
+
+              <div class="form-group">
+                <label class="form-label" for="session-topic">Session Topic (Optional)</label>
+                <input class="form-input" type="text" id="session-topic" placeholder="e.g. Lecture 5 — Threads &amp; Processes" />
+              </div>
+
+              <div class="location-row">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" for="loc-lat">Latitude</label>
+                  <input class="form-input" type="text" id="loc-lat" placeholder="12.9716" />
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" for="loc-lng">Longitude</label>
+                  <input class="form-input" type="text" id="loc-lng" placeholder="77.5946" />
+                </div>
+              </div>
+
+              <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.4rem;">
+                <button type="button" class="btn btn-ghost btn-sm" id="use-location-btn">📍 Get Location</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="demo-location-btn">🎯 Fill Demo Coords</button>
+              </div>
+
+              <div class="form-group mt-2">
+                <label class="form-label" for="radius">
+                  Geofence Radius: <strong id="radius-display">100</strong>m
+                </label>
+                <input type="range" id="radius" min="20" max="500" value="100" step="10"
+                  style="width:100%;accent-color:var(--accent-primary);cursor:pointer;" />
+                <div style="display:flex;gap:0.35rem;margin-top:0.4rem;">
+                  <button type="button" class="btn btn-ghost btn-sm btn-radius-preset" data-radius="50">50m</button>
+                  <button type="button" class="btn btn-ghost btn-sm btn-radius-preset" data-radius="100">100m</button>
+                  <button type="button" class="btn btn-ghost btn-sm btn-radius-preset" data-radius="200">200m</button>
+                  <button type="button" class="btn btn-ghost btn-sm btn-radius-preset" data-radius="500">500m</button>
+                </div>
+                <small style="margin-top:0.2rem;display:block;color:var(--text-muted);">
+                  💡 Laptops using Wi-Fi location have a ~50-70m offset. 100m+ recommended for desktop testing.
+                </small>
+              </div>
+
+              <div id="create-status"></div>
+
+              <button type="button" class="btn btn-primary btn-full btn-lg mt-2" id="start-session-btn">
+                ▶ Start Attendance Session
+              </button>
+            </div>
+
+            <!-- Active Session QR View -->
+            <div id="active-session-view" class="hidden" style="border-top:1px solid var(--border);padding-top:1rem;">
+              <div class="flex items-center justify-between mb-2">
+                <div>
+                  <span class="badge badge-green">LIVE SESSION</span>
+                  <h3 id="active-class-name" style="margin-top:0.25rem;"></h3>
+                </div>
+                <button type="button" class="btn btn-danger btn-sm" id="end-session-btn">End Session</button>
+              </div>
+
+              <div class="session-info-bar mb-2" style="font-size:0.8rem;background:var(--bg-secondary);padding:0.6rem;border-radius:4px;border:1px solid var(--border);">
+                <span>📍 <span id="active-radius">100</span>m radius</span> &nbsp;|&nbsp;
+                <span>🕒 Started <span id="active-start-time">—</span></span>
+              </div>
+
+              <div class="qr-section">
+                <div class="qr-frame" id="qr-frame">
+                  <div id="qr-code-display"></div>
+                </div>
+
+                <div class="qr-refresh-bar">
+                  <div class="qr-refresh-bar-fill" id="qr-progress-bar" style="width:100%"></div>
+                </div>
+
+                <div class="qr-timer">
+                  Refreshes in <strong id="qr-countdown">15</strong>s
+                </div>
+              </div>
+
+              <div id="end-status"></div>
+            </div>
+
+          </div>
+
+          <!-- RIGHT: Enrolled Roster & Live Attendance -->
+          <div>
+            <!-- Course Roster Card -->
+            <div class="card mb-2">
+              <div class="section-header">
+                <div>
+                  <h2>Enrolled Student Roster</h2>
+                  <p id="ws-enrolled-count">0 enrolled student emails</p>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" id="ws-add-students-btn">+ Add Students</button>
+              </div>
+
+              <div id="ws-roster-list" style="display:flex;flex-direction:column;gap:0.4rem;max-height:180px;overflow-y:auto;">
+                <div class="empty-state"><p>No students enrolled yet</p></div>
+              </div>
+            </div>
+
+            <!-- Live Attendance Roster Card -->
+            <div class="card">
+              <div class="section-header" style="flex-wrap:wrap;gap:0.75rem;">
+                <div>
+                  <h2>Live Session Check-ins</h2>
+                  <p id="attendance-subtitle">Start session to see check-ins here</p>
+                </div>
+                <button type="button" class="btn btn-success btn-sm" id="export-csv-btn" disabled>
+                  📥 Export CSV
+                </button>
+              </div>
+
+              <div class="stats-grid mb-2">
+                <div class="stat-card">
+                  <div class="stat-value" id="present-count">0</div>
+                  <div class="stat-label">Present</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-value" id="last-scan-time">—</div>
+                  <div class="stat-label">Last Check-in</div>
+                </div>
+              </div>
+
+              <div id="attendance-list" class="attendance-list">
+                <div class="empty-state">
+                  <p>Waiting for students to scan in…</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Create Course Modal -->
+  <div id="course-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="section-header">
+        <h3>Create New Course</h3>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-close-course-modal">✕</button>
+      </div>
+      <form id="create-course-form">
+        <div class="form-group">
+          <label class="form-label" for="new-course-code">Course Code</label>
+          <input class="form-input" type="text" id="new-course-code" placeholder="e.g. CS101" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="new-course-name">Course Name</label>
+          <input class="form-input" type="text" id="new-course-name" placeholder="e.g. Operating Systems" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="new-course-emails">Enroll Student Emails (comma or newline separated)</label>
+          <textarea class="form-input" id="new-course-emails" rows="4" placeholder="student1@univ.edu, student2@univ.edu"></textarea>
+        </div>
+        <div id="course-modal-status"></div>
+        <div class="flex gap-1 mt-2 justify-between">
+          <button type="button" class="btn btn-ghost" id="btn-cancel-course-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="save-course-btn">Create &amp; Enroll</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Enroll Students Modal -->
+  <div id="enroll-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="section-header">
+        <h3 id="enroll-modal-title">Enroll Students</h3>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-close-enroll-modal">✕</button>
+      </div>
+      <form id="enroll-form">
+        <input type="hidden" id="enroll-course-id" />
+        <div class="form-group">
+          <label class="form-label" for="enroll-emails">Add Student Emails</label>
+          <textarea class="form-input" id="enroll-emails" rows="4" placeholder="student1@univ.edu, student2@univ.edu"></textarea>
+        </div>
+        <div id="enroll-modal-status"></div>
+        <div class="flex gap-1 mt-2 justify-between">
+          <button type="button" class="btn btn-ghost" id="btn-cancel-enroll-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Enroll Students</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/js/teacher.js"></script>
+</body>
+</html>
