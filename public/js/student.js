@@ -181,9 +181,14 @@ async function extractFaceDetails(videoElement) {
 
   const textureVariance = calculateTextureVariance(videoElement, detection);
 
-  // Head Yaw Ratio (0.50 = straight, >0.58 = right, <0.42 = left)
+  // Head Yaw Ratio (0.50 = straight, >0.54 = right, <0.46 = left)
   const faceWidth = jaw[16].x - jaw[0].x;
   const yawRatio = faceWidth > 0 ? (nose[3].x - jaw[0].x) / faceWidth : 0.50;
+
+  // Head Pitch Ratio (0.40 = straight, <0.33 = UP)
+  const eyeCenterY = (leftEye[0].y + rightEye[3].y) / 2;
+  const faceHeight = jaw[8].y - eyeCenterY;
+  const pitchRatio = faceHeight > 0 ? (nose[3].y - eyeCenterY) / faceHeight : 0.40;
 
   // Eye Aspect Ratio (EAR) for eye blink
   const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
@@ -191,11 +196,18 @@ async function extractFaceDetails(videoElement) {
   const rightEAR = (dist(rightEye[1], rightEye[5]) + dist(rightEye[2], rightEye[4])) / (2 * dist(rightEye[0], rightEye[3]));
   const avgEAR = (leftEAR + rightEAR) / 2.0;
 
+  // Mouth Aspect Ratio (MAR) for smile/open
+  const mouthVert = dist(mouth[13], mouth[17]);
+  const mouthHoriz = dist(mouth[0], mouth[6]);
+  const mar = mouthHoriz > 0 ? mouthVert / mouthHoriz : 0.10;
+
   return {
     descriptor: Array.from(detection.descriptor),
     textureVariance,
     yawRatio,
-    avgEAR
+    pitchRatio,
+    avgEAR,
+    mar
   };
 }
 
@@ -322,7 +334,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Multi-Layer Texture & Randomized Action Liveness) ──
+// ── STEP 1: Face-First Scan Workflow (High-Sensitivity 5-Action Pool) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -340,11 +352,13 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  // Generate randomized action challenge at runtime
+  // Generate randomized action challenge from 5 quick natural gestures
   const challenges = [
-    { code: 'BLINK', label: '👁️ Blink both eyes once' },
+    { code: 'SMILE', label: '😊 Smile or open mouth slightly' },
+    { code: 'BLINK', label: '👁️ Blink eyes once' },
     { code: 'RIGHT', label: '➡️ Turn head slightly RIGHT' },
-    { code: 'LEFT',  label: '⬅️ Turn head slightly LEFT' }
+    { code: 'LEFT',  label: '⬅️ Turn head slightly LEFT' },
+    { code: 'UP',    label: '⬆️ Tilt head slightly UP' }
   ];
   const activeChallenge = challenges[Math.floor(Math.random() * challenges.length)];
 
@@ -388,7 +402,7 @@ async function startBiometricScanWorkflow() {
           promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
         } else {
-          const { descriptor, textureVariance, yawRatio, avgEAR } = details;
+          const { descriptor, textureVariance, yawRatio, pitchRatio, avgEAR, mar } = details;
 
           // 1. Texture Blur Analysis (Detect flat paper photo or screen display)
           if (textureVariance < 12.0) {
@@ -415,24 +429,28 @@ async function startBiometricScanWorkflow() {
                 promptEl.style.color = '#fbbf24';
               }
             } else {
-              // 3. Evaluate Randomized Action Challenge
-              if (activeChallenge.code === 'BLINK') {
-                if (avgEAR < 0.21) blinkClosed = true;
+              // 3. Evaluate High-Sensitivity Action Challenge
+              if (activeChallenge.code === 'SMILE') {
+                if (mar > 0.22) challengePassed = true;
+              } else if (activeChallenge.code === 'BLINK') {
+                if (avgEAR < 0.24) blinkClosed = true;
                 if (blinkClosed && avgEAR >= 0.25) challengePassed = true;
               } else if (activeChallenge.code === 'RIGHT') {
-                if (yawRatio > 0.57) challengePassed = true;
+                if (yawRatio > 0.54) challengePassed = true;
               } else if (activeChallenge.code === 'LEFT') {
-                if (yawRatio < 0.43) challengePassed = true;
+                if (yawRatio < 0.46) challengePassed = true;
+              } else if (activeChallenge.code === 'UP') {
+                if (pitchRatio < 0.33) challengePassed = true;
               }
 
               if (challengePassed) {
-                promptEl.textContent = '✓ Live Face & Texture Verified!';
+                promptEl.textContent = '✓ Live Face & Action Verified!';
                 promptEl.style.color = '#4ade80';
                 subtextEl.textContent = 'Liveness & identity confirmed. Opening QR scanner…';
                 setTimeout(async () => {
                   cleanupVerificationView();
                   await openQRScannerCamera();
-                }, 400);
+                }, 350);
                 return;
               } else {
                 promptEl.textContent = activeChallenge.label;
@@ -446,7 +464,7 @@ async function startBiometricScanWorkflow() {
       }
     }
 
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(r => setTimeout(r, 150));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
