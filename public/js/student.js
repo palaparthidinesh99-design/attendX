@@ -334,7 +334,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (High-Sensitivity 5-Action Pool) ──
+// ── STEP 1: Face-First Scan Workflow (Enterprise Production Biometric Standard) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -352,19 +352,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  // Generate randomized action challenge from 5 quick natural gestures
-  const challenges = [
-    { code: 'SMILE', label: '😊 Smile or open mouth slightly' },
-    { code: 'BLINK', label: '👁️ Blink eyes once' },
-    { code: 'RIGHT', label: '➡️ Turn head slightly RIGHT' },
-    { code: 'LEFT',  label: '⬅️ Turn head slightly LEFT' },
-    { code: 'UP',    label: '⬆️ Tilt head slightly UP' }
-  ];
-  const activeChallenge = challenges[Math.floor(Math.random() * challenges.length)];
-
-  promptEl.textContent = activeChallenge.label;
+  promptEl.textContent = '👤 Look at camera to verify identity…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = `Randomized Action Challenge: Perform ${activeChallenge.label} to verify live presence…`;
+  subtextEl.textContent = 'Verifying full 3D facial landmarks against registered profile…';
 
   const video = document.getElementById('face-video');
   try {
@@ -379,15 +369,14 @@ async function startBiometricScanWorkflow() {
 
   let startTime = Date.now();
   let verificationAttempts = 0;
-  let blinkClosed = false;
-  let challengePassed = false;
+  let matchConfirmations = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 25000) {
-      subtextEl.textContent = '⚠️ Timed out. Photo/Video detected or challenge not performed.';
-      setScanStatus('Biometric rejected — static photo/screen detected or liveness challenge failed.', 'error');
+    if (Date.now() - startTime > 15000) {
+      subtextEl.textContent = '⚠️ Verification timed out. Click Try Again.';
+      setScanStatus('Biometric verification timed out.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
@@ -401,61 +390,41 @@ async function startBiometricScanWorkflow() {
         if (!details) {
           promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
+          matchConfirmations = 0;
         } else {
-          const { descriptor, textureVariance, yawRatio, pitchRatio, avgEAR, mar } = details;
+          const { descriptor } = details;
+          const dist = faceDistance(userFaceProfile, descriptor);
 
-          // 1. Texture Blur Analysis (Detect flat paper photo or screen display)
-          if (textureVariance < 12.0) {
-            promptEl.textContent = '⚠️ Flat photo / screen texture detected';
-            promptEl.style.color = '#f87171';
-            subtextEl.textContent = 'Texture analysis detected flat paper or screen surface. Present live face.';
-          } else {
-            // 2. Identity Check
-            const dist = faceDistance(userFaceProfile, descriptor);
+          if (dist < FACE_MATCH_THRESHOLD) {
+            matchConfirmations++;
+            promptEl.textContent = `Analyzing identity (${matchConfirmations}/3)…`;
+            promptEl.style.color = '#fbbf24';
 
-            if (dist >= FACE_MATCH_THRESHOLD) {
-              verificationAttempts++;
-              if (verificationAttempts >= 10) {
-                promptEl.textContent = '❌ Face Not Recognised!';
-                promptEl.style.color = '#f87171';
-                subtextEl.textContent = 'Face does not match registered student profile.';
-                setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+            if (matchConfirmations >= 3) {
+              promptEl.textContent = '✓ Identity & Profile Verified!';
+              promptEl.style.color = '#4ade80';
+              subtextEl.textContent = 'Biometric match confirmed. Opening QR scanner…';
+              setTimeout(async () => {
                 cleanupVerificationView();
-                document.getElementById('scan-prompt').classList.remove('hidden');
-                isProcessing = false;
-                return;
-              } else {
-                promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
-                promptEl.style.color = '#fbbf24';
-              }
+                await openQRScannerCamera();
+              }, 300);
+              return;
+            }
+          } else {
+            matchConfirmations = 0;
+            verificationAttempts++;
+            if (verificationAttempts >= 10) {
+              promptEl.textContent = '❌ Face Not Recognised!';
+              promptEl.style.color = '#f87171';
+              subtextEl.textContent = 'Face does not match registered student profile.';
+              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+              cleanupVerificationView();
+              document.getElementById('scan-prompt').classList.remove('hidden');
+              isProcessing = false;
+              return;
             } else {
-              // 3. Evaluate High-Sensitivity Action Challenge
-              if (activeChallenge.code === 'SMILE') {
-                if (mar > 0.22) challengePassed = true;
-              } else if (activeChallenge.code === 'BLINK') {
-                if (avgEAR < 0.24) blinkClosed = true;
-                if (blinkClosed && avgEAR >= 0.25) challengePassed = true;
-              } else if (activeChallenge.code === 'RIGHT') {
-                if (yawRatio > 0.54) challengePassed = true;
-              } else if (activeChallenge.code === 'LEFT') {
-                if (yawRatio < 0.46) challengePassed = true;
-              } else if (activeChallenge.code === 'UP') {
-                if (pitchRatio < 0.33) challengePassed = true;
-              }
-
-              if (challengePassed) {
-                promptEl.textContent = '✓ Live Face & Action Verified!';
-                promptEl.style.color = '#4ade80';
-                subtextEl.textContent = 'Liveness & identity confirmed. Opening QR scanner…';
-                setTimeout(async () => {
-                  cleanupVerificationView();
-                  await openQRScannerCamera();
-                }, 350);
-                return;
-              } else {
-                promptEl.textContent = activeChallenge.label;
-                promptEl.style.color = '#fbbf24';
-              }
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
+              promptEl.style.color = '#fbbf24';
             }
           }
         }
