@@ -507,13 +507,33 @@ async function submitManualToken() {
 }
 
 // ── Compact Monthly Attendance Calendar & Side Panel Renderer ────────────
+let currentCalDate = new Date();
+let selectedDateStr = new Date().toISOString().split('T')[0];
+
 function renderInteractiveCalendar() {
   const container = document.getElementById('calendar-month-container');
   if (!container) return;
 
+  const today = new Date();
   const year = currentCalDate.getFullYear();
   const month = currentCalDate.getMonth();
-  const monthName = currentCalDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+
+  // 1-year boundary bounds (from 12 months ago to current month)
+  const minDate = new Date(today.getFullYear(), today.getMonth() - 12, 1);
+  const maxDate = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  const canPrev = new Date(year, month - 1, 1) >= minDate;
+  const canNext = new Date(year, month + 1, 1) <= maxDate;
+
+  // Build Month-Year Dropdown options (past 12 months)
+  let monthOptions = '';
+  for (let i = 0; i <= 12; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const val = `${d.getFullYear()}-${d.getMonth()}`;
+    const label = d.toLocaleString('default', { month: 'long', year: 'numeric' });
+    const isSelected = d.getFullYear() === year && d.getMonth() === month;
+    monthOptions += `<option value="${val}" ${isSelected ? 'selected' : ''}>${label}</option>`;
+  }
 
   const firstDayIndex = new Date(year, month, 1).getDay();
   const lastDate = new Date(year, month + 1, 0).getDate();
@@ -527,11 +547,11 @@ function renderInteractiveCalendar() {
     dayCells += `<div class="cal-day-cell other-month"></div>`;
   }
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = today.toISOString().split('T')[0];
 
   for (let day = 1; day <= lastDate; day++) {
     const dStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const sessions = window.sessionsByDateMap[dStr] || [];
+    const sessions = window.sessionsByDateMap ? (window.sessionsByDateMap[dStr] || []) : [];
     const isToday = dStr === todayStr;
     const isSelected = dStr === selectedDateStr;
 
@@ -542,8 +562,8 @@ function renderInteractiveCalendar() {
       const hasMissed = sessions.some(s => s.status === 'ABSENT');
 
       if (hasAttended) dotsHtml += `<span class="cal-dot green" title="Attended"></span>`;
-      if (hasOngoing) dotsHtml += `<span class="cal-dot" title="Live class in progress" style="background:#3b82f6;"></span>`;
-      if (hasMissed) dotsHtml += `<span class="cal-dot red" title="Missed (Session ended)"></span>`;
+      if (hasOngoing) dotsHtml += `<span class="cal-dot" title="Live class in progress" style="background:#3b82f6;box-shadow:0 0 6px rgba(59,130,246,0.6);"></span>`;
+      if (hasMissed) dotsHtml += `<span class="cal-dot red" title="Missed class"></span>`;
     }
 
     dayCells += `
@@ -555,13 +575,21 @@ function renderInteractiveCalendar() {
 
   container.innerHTML = `
     <div class="calendar-month-header">
-      <button type="button" class="btn btn-ghost btn-sm" onclick="window.changeCalMonth(-1)">← Prev</button>
-      <span class="calendar-month-title">${monthName}</span>
-      <button type="button" class="btn btn-ghost btn-sm" onclick="window.changeCalMonth(1)">Next →</button>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="window.changeCalMonth(-1)" ${!canPrev ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : ''}>← Prev</button>
+      <select class="calendar-month-select" onchange="window.jumpToCalMonth(this.value)">
+        ${monthOptions}
+      </select>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="window.changeCalMonth(1)" ${!canNext ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : ''}>Next →</button>
     </div>
     <div class="calendar-month-grid">
       ${daysHeader}
       ${dayCells}
+    </div>
+    <div class="calendar-legend">
+      <div class="legend-item"><span class="cal-dot green"></span> Attended</div>
+      <div class="legend-item"><span class="cal-dot" style="background:#3b82f6;"></span> Live Class</div>
+      <div class="legend-item"><span class="cal-dot red"></span> Missed</div>
+      <div class="legend-item" style="opacity:0.75;">☕ No Class</div>
     </div>
   `;
 
@@ -569,14 +597,28 @@ function renderInteractiveCalendar() {
 }
 
 function changeCalMonth(delta) {
-  currentCalDate.setMonth(currentCalDate.getMonth() + delta);
+  const today = new Date();
+  const minDate = new Date(today.getFullYear(), today.getMonth() - 12, 1);
+  const maxDate = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  const targetDate = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + delta, 1);
+  if (targetDate >= minDate && targetDate <= maxDate) {
+    currentCalDate = targetDate;
+    renderInteractiveCalendar();
+  }
+}
+
+function jumpToCalMonth(valStr) {
+  if (!valStr) return;
+  const [y, m] = valStr.split('-').map(Number);
+  currentCalDate = new Date(y, m, 1);
   renderInteractiveCalendar();
 }
 
 // ── Render Day Details in Side Panel (Attended vs Ongoing vs Missed) ─────
 function renderSidePanelDayDetails(dateStr) {
   selectedDateStr = dateStr;
-  const sessions = window.sessionsByDateMap[dateStr] || [];
+  const sessions = window.sessionsByDateMap ? (window.sessionsByDateMap[dateStr] || []) : [];
 
   const titleEl = document.getElementById('side-panel-title');
   const subEl = document.getElementById('side-panel-subtitle');
@@ -590,13 +632,15 @@ function renderSidePanelDayDetails(dateStr) {
   } catch (_) {}
 
   if (titleEl) titleEl.textContent = `📅 ${formattedDate}`;
-  if (subEl) subEl.textContent = sessions.length ? `${sessions.length} class session(s) conducted` : 'No classes held on this date';
+  if (subEl) subEl.textContent = sessions.length ? `${sessions.length} class session(s) held` : 'No classes scheduled';
 
   if (contentEl) {
     if (!sessions.length) {
       contentEl.innerHTML = `
-        <div class="empty-state" style="padding:1rem 0.5rem;text-align:center;">
-          <p style="font-size:0.8rem;color:var(--text-muted);">No class sessions conducted on ${formattedDate}.</p>
+        <div class="no-class-box">
+          <div class="no-class-icon">☕</div>
+          <div class="no-class-title">No Classes Scheduled</div>
+          <div class="no-class-desc">No class sessions were held on ${formattedDate}.</div>
         </div>`;
     } else {
       contentEl.innerHTML = sessions.map(s => {
@@ -604,29 +648,34 @@ function renderSidePanelDayDetails(dateStr) {
         if (s.status === 'PRESENT') {
           badge = `<span class="badge badge-green">Attended ✓</span>`;
         } else if (s.status === 'ONGOING') {
-          badge = `<span class="badge badge-blue">Live Session ▶ (In Progress)</span>`;
+          badge = `<span class="badge badge-blue">Live Session ▶</span>`;
         } else {
           badge = `<span class="badge badge-red">Missed ❌</span>`;
         }
 
         const meta = s.status === 'PRESENT'
-          ? `🕒 Check-in: ${s.timeString} &nbsp;|&nbsp; 📍 ${s.distanceMeters != null ? s.distanceMeters + 'm' : 'Verified'}`
+          ? `🕒 Checked in at ${s.timeString} &nbsp;|&nbsp; 📍 ${s.distanceMeters != null ? s.distanceMeters + 'm' : 'Verified'}`
           : s.status === 'ONGOING'
-            ? `Instructor: ${s.teacherName} (Class ongoing right now — click Verify Face & Scan above)`
+            ? `Instructor: ${s.teacherName} (Live in progress — scan QR above)`
             : `Instructor: ${s.teacherName} (Class ended at ${s.timeString})`;
 
         return `
-          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.65rem;">
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.75rem;box-shadow:0 2px 8px rgba(0,0,0,0.2);">
             <div class="flex items-center justify-between mb-1">
-              <strong style="font-size:0.82rem;">${s.courseCode}</strong>
+              <strong style="font-size:0.85rem;color:var(--text-primary);">${s.courseCode}</strong>
               ${badge}
             </div>
-            <div style="font-size:0.75rem;color:var(--text-secondary);">${s.className}</div>
-            <div style="font-size:0.7rem;color:var(--text-muted);margin-top:0.2rem;">${meta}</div>
+            <div style="font-size:0.78rem;color:var(--text-secondary);font-weight:500;">${s.className}</div>
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;border-top:1px solid rgba(255,255,255,0.05);padding-top:0.3rem;">${meta}</div>
           </div>`;
       }).join('');
     }
   }
+
+  // Re-highlight the selected day cell in grid
+  document.querySelectorAll('.cal-day-cell').forEach(cell => {
+    cell.classList.remove('selected-day');
+  });
 }
 
 // ── Subject Analytics & Attendance Synchronization ──────────────────────
@@ -694,6 +743,7 @@ window.resetScanner = resetScanner;
 window.submitManualToken = submitManualToken;
 window.loadAnalytics = loadAnalytics;
 window.changeCalMonth = changeCalMonth;
+window.jumpToCalMonth = jumpToCalMonth;
 window.renderSidePanelDayDetails = renderSidePanelDayDetails;
 window.logout = logout;
 

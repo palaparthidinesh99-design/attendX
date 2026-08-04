@@ -467,6 +467,12 @@ small { font-size: 0.8rem; color: var(--text-muted); }
   background: rgba(99, 102, 241, 0.08);
 }
 
+.cal-day-cell.selected-day {
+  border-color: #818cf8 !important;
+  background: rgba(99, 102, 241, 0.2) !important;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.4);
+}
+
 .cal-day-num {
   font-size: 0.8rem;
   font-weight: 600;
@@ -487,13 +493,83 @@ small { font-size: 0.8rem; color: var(--text-muted); }
   border-radius: 50%;
 }
 
-.cal-dot.green { background: var(--accent-success); box-shadow: 0 0 6px rgba(22, 163, 74, 0.5); }
-.cal-dot.red { background: var(--accent-danger); box-shadow: 0 0 6px rgba(220, 38, 38, 0.5); }
+.cal-dot.green { background: var(--accent-success); box-shadow: 0 0 6px rgba(22, 163, 74, 0.6); }
+.cal-dot.red { background: var(--accent-danger); box-shadow: 0 0 6px rgba(220, 38, 38, 0.6); }
+
+/* ── Calendar Legend ────────────────────────────────────────────────────── */
+.calendar-legend {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: center;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* ── No Class Scheduled State Card ────────────────────────────────────── */
+.no-class-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1rem;
+  text-align: center;
+  background: var(--bg-card);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  margin-top: 0.5rem;
+}
+
+.no-class-icon {
+  font-size: 2.2rem;
+  margin-bottom: 0.4rem;
+  line-height: 1;
+}
+
+.no-class-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.no-class-desc {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.calendar-month-select {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+  font-family: inherit;
+}
+
+.calendar-month-select:focus {
+  border-color: var(--accent-primary);
+}
 
 /* ── Compact Calendar & Side Panel Container ───────────────────────────── */
 .calendar-layout-container {
   display: grid;
-  grid-template-columns: 1fr 300px;
+  grid-template-columns: 1fr 310px;
   gap: 1rem;
   align-items: start;
 }
@@ -507,6 +583,6 @@ small { font-size: 0.8rem; color: var(--text-muted); }
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 1rem;
-  min-height: 240px;
+  min-height: 250px;
 }
 
