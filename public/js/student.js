@@ -187,7 +187,15 @@ function computeVectorSimilarity(vecA, vecB) {
 }
 
 // Minimum cosine similarity to accept a face match (higher = stricter)
-const FACE_MATCH_THRESHOLD = 0.88;
+const FACE_MATCH_THRESHOLD = 0.93;
+
+// Returns a measure of how much spatial texture variety is in the vector (0–1).
+// A forehead or blank wall scores low; a full face with eyes/nose/mouth scores high.
+function computeTextureComplexity(vector) {
+  const mean = vector.reduce((s, v) => s + v, 0) / vector.length;
+  const variance = vector.reduce((s, v) => s + (v - mean) ** 2, 0) / vector.length;
+  return Math.sqrt(variance); // std-dev of the L2-normalised descriptor
+}
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
@@ -359,6 +367,20 @@ async function startBiometricScanWorkflow() {
           await new Promise(r => setTimeout(r, 150));
           const v3 = extractCanvasFaceVector(video);
 
+          // Guard: reject if the frame doesn't have enough facial complexity
+          // (a forehead, wall, or hand will have very low texture variance)
+          const complexity = (computeTextureComplexity(v1) + computeTextureComplexity(v2) + computeTextureComplexity(v3)) / 3;
+          if (complexity < 0.04) {
+            promptEl.textContent = '⚠️ Full face not detected!';
+            promptEl.style.color = '#fbbf24';
+            subtextEl.textContent = 'Please centre your entire face — eyes, nose and mouth must be visible.';
+            setScanStatus('Full face not visible. Align your face with the camera and try again.', 'warning');
+            cleanupVerificationView();
+            document.getElementById('scan-prompt').classList.remove('hidden');
+            isProcessing = false;
+            return;
+          }
+
           const sim1 = computeVectorSimilarity(userFaceProfile, v1);
           const sim2 = computeVectorSimilarity(userFaceProfile, v2);
           const sim3 = computeVectorSimilarity(userFaceProfile, v3);
@@ -377,9 +399,10 @@ async function startBiometricScanWorkflow() {
           } else {
             promptEl.textContent = '❌ Face Not Recognised!';
             promptEl.style.color = '#f87171';
-            subtextEl.textContent = `Match score: ${Math.round(similarity * 100)}% (minimum required: ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Ensure you are the registered student and face the camera squarely in good lighting.`;
-            setScanStatus(`Biometric rejected — ${Math.round(similarity * 100)}% match (need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Re-register your face profile in better lighting if this persists.`, 'error');
+            subtextEl.textContent = `Match score: ${Math.round(similarity * 100)}% (need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Face camera squarely in good lighting.`;
+            setScanStatus(`Biometric rejected — ${Math.round(similarity * 100)}% match (need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Ensure you are the registered student.`, 'error');
             cleanupVerificationView();
+            document.getElementById('scan-prompt').classList.remove('hidden');
             isProcessing = false;
             return;
           }
