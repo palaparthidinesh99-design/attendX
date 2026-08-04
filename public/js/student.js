@@ -106,7 +106,17 @@ window.addEventListener('load', () => {
   loadFaceApiModels().catch(err => console.warn('Model preload failed:', err.message));
 });
 
-// Extract face descriptor, nose tip, and 3D feature ratio for liveness analysis
+// Calculate Mouth Aspect Ratio (MAR) for active liveness action check
+function getMouthMAR(mouthPoints) {
+  if (!mouthPoints || mouthPoints.length < 18) return 0;
+  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+  const vertical = dist(mouthPoints[13], mouthPoints[17]);
+  const horizontal = dist(mouthPoints[0], mouthPoints[6]);
+  if (horizontal === 0) return 0;
+  return vertical / horizontal;
+}
+
+// Extract face descriptor AND Mouth Aspect Ratio (MAR) for active liveness challenge
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
@@ -115,23 +125,12 @@ async function extractFaceDetails(videoElement) {
     .withFaceDescriptor();
   if (!detection) return null;
 
-  const landmarks = detection.landmarks;
-  const nose = landmarks.getNose();
-  const leftEye = landmarks.getLeftEye();
-  const rightEye = landmarks.getRightEye();
-  const jaw = landmarks.getJawOutline();
-
-  let featureRatio = 0.35;
-  if (leftEye && rightEye && jaw && jaw.length >= 17) {
-    const eyeDist = Math.hypot(leftEye[0].x - rightEye[3].x, leftEye[0].y - rightEye[3].y);
-    const jawWidth = Math.hypot(jaw[0].x - jaw[16].x, jaw[0].y - jaw[16].y);
-    if (jawWidth > 0) featureRatio = eyeDist / jawWidth;
-  }
+  const mouth = detection.landmarks.getMouth();
+  const mar = getMouthMAR(mouth);
 
   return {
     descriptor: Array.from(detection.descriptor),
-    noseTip: nose && nose.length > 3 ? { x: nose[3].x, y: nose[3].y } : null,
-    featureRatio
+    mar
   };
 }
 
@@ -258,7 +257,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Neural Face Match + Anti-Video/Photo Liveness) ──
+// ── STEP 1: Face-First Scan Workflow (Active Action Liveness: Mouth Open) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -275,9 +274,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👤 Look at the camera to verify identity…';
+  promptEl.textContent = '😮 Open your mouth slightly to verify live presence…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Analyzing neural face descriptor…';
+  subtextEl.textContent = 'Active Liveness: Open your mouth slightly to prove live presence (photo anti-spoofing active)…';
 
   const video = document.getElementById('face-video');
   try {
@@ -291,19 +290,16 @@ async function startBiometricScanWorkflow() {
   }
 
   let startTime = Date.now();
+  let baselineClosedPassed = false;
+  let actionOpenPassed = false;
   let verificationAttempts = 0;
-  let matchCount = 0;
-  let prevNoseTip = null;
-  let staticFrameCount = 0;
-  let ratioBuffer = [];
-  let rigidPhotoCount = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 20000) {
-      subtextEl.textContent = '⚠️ Timed out. Click Try Again.';
-      setScanStatus('Biometric verification timed out.', 'error');
+    if (Date.now() - startTime > 25000) {
+      subtextEl.textContent = '⚠️ Timed out. Photo detected or action not performed.';
+      setScanStatus('Biometric rejected — static photo detected or action not performed.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
@@ -317,67 +313,14 @@ async function startBiometricScanWorkflow() {
         if (!details) {
           promptEl.textContent = '👤 Position your face in camera…';
           promptEl.style.color = '#fbbf24';
-          matchCount = 0;
-          staticFrameCount = 0;
-          rigidPhotoCount = 0;
-          ratioBuffer = [];
         } else {
-          const { descriptor, noseTip, featureRatio } = details;
-
-          // 1. Static Photo Detection (Zero movement across frames)
-          if (noseTip && prevNoseTip) {
-            const movement = Math.hypot(noseTip.x - prevNoseTip.x, noseTip.y - prevNoseTip.y);
-            if (movement < 0.05) {
-              staticFrameCount++;
-            } else {
-              staticFrameCount = Math.max(0, staticFrameCount - 1);
-            }
-          }
-          if (noseTip) prevNoseTip = noseTip;
-
-          // 2. Moving Photo / Screen Video Playback Detection (Zero 3D non-rigid variance)
-          ratioBuffer.push(featureRatio);
-          if (ratioBuffer.length > 5) ratioBuffer.shift();
-
-          if (ratioBuffer.length >= 5) {
-            const avg = ratioBuffer.reduce((a, b) => a + b, 0) / ratioBuffer.length;
-            const variance = ratioBuffer.reduce((sum, r) => sum + (r - avg) ** 2, 0) / ratioBuffer.length;
-
-            if (variance < 0.000003) {
-              rigidPhotoCount++;
-            } else {
-              rigidPhotoCount = Math.max(0, rigidPhotoCount - 1);
-            }
-          }
-
+          const { descriptor, mar } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          // Reject photo if static frames or 2D rigid plane scaling detected
-          if (staticFrameCount >= 4 || rigidPhotoCount >= 4) {
-            matchCount = 0;
-            promptEl.textContent = '⚠️ Photo detected — please present your live face';
-            promptEl.style.color = '#f87171';
-            subtextEl.textContent = 'Photo/Screen spoof detected. Please present your live face to the camera.';
-          } else if (dist < FACE_MATCH_THRESHOLD) {
-            matchCount++;
-            promptEl.textContent = `Analyzing liveness & identity (${matchCount}/8)…`;
-            promptEl.style.color = '#fbbf24';
-
-            // Require 8 consecutive clean frames (1.6s) to ensure full liveness evaluation
-            if (matchCount >= 8) {
-              promptEl.textContent = '✓ Live Face Verified!';
-              promptEl.style.color = '#4ade80';
-              subtextEl.textContent = 'Identity & liveness confirmed. Opening QR scanner…';
-              setTimeout(async () => {
-                cleanupVerificationView();
-                await openQRScannerCamera();
-              }, 400);
-              return;
-            }
-          } else {
-            matchCount = 0;
+          // 1. Identity Check
+          if (dist >= FACE_MATCH_THRESHOLD) {
             verificationAttempts++;
-            if (verificationAttempts >= 12) {
+            if (verificationAttempts >= 10) {
               promptEl.textContent = '❌ Face Not Recognised!';
               promptEl.style.color = '#f87171';
               subtextEl.textContent = 'Face does not match registered profile.';
@@ -387,8 +330,42 @@ async function startBiometricScanWorkflow() {
               isProcessing = false;
               return;
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/12) — hold still…`;
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
               promptEl.style.color = '#fbbf24';
+            }
+          } else {
+            // 2. Active Liveness Action State Machine
+            // Phase A: Baseline (Normal/Closed mouth: MAR < 0.22)
+            if (!baselineClosedPassed) {
+              if (mar < 0.22) {
+                baselineClosedPassed = true;
+                promptEl.textContent = '😮 Now open your mouth slightly…';
+                promptEl.style.color = '#fbbf24';
+              } else {
+                promptEl.textContent = '👤 Close mouth to start liveness check…';
+                promptEl.style.color = '#fbbf24';
+              }
+            } 
+            // Phase B: Action (Mouth Opened: MAR >= 0.28)
+            else if (!actionOpenPassed) {
+              if (mar >= 0.28) {
+                actionOpenPassed = true;
+              } else {
+                promptEl.textContent = '😮 Open your mouth slightly…';
+                promptEl.style.color = '#fbbf24';
+              }
+            }
+
+            // Completion: Both Baseline & Action passed + Identity verified
+            if (baselineClosedPassed && actionOpenPassed) {
+              promptEl.textContent = '✓ Live Face Verified!';
+              promptEl.style.color = '#4ade80';
+              subtextEl.textContent = 'Active liveness & identity confirmed. Opening QR scanner…';
+              setTimeout(async () => {
+                cleanupVerificationView();
+                await openQRScannerCamera();
+              }, 400);
+              return;
             }
           }
         }
