@@ -107,16 +107,16 @@ window.addEventListener('load', () => {
 });
 
 // Extract a 128-D neural face embedding from a video element.
-// Calculate 3D Head Yaw Ratio from 68 facial landmarks (0.50 = straight, >0.58 = right, <0.42 = left)
+// Calculate 3D Head Yaw Ratio from 68 facial landmarks (0.50 = straight, >0.57 = right, <0.43 = left)
 function calculateHeadYawRatio(landmarks) {
   if (!landmarks) return 0.50;
   const jaw = landmarks.getJawOutline();
   const nose = landmarks.getNose();
   if (!jaw || jaw.length < 17 || !nose || nose.length < 4) return 0.50;
 
-  const leftJaw = jaw[0];     // Left face boundary
-  const rightJaw = jaw[16];   // Right face boundary
-  const noseTip = nose[3];    // Nose tip
+  const leftJaw = jaw[0];
+  const rightJaw = jaw[16];
+  const noseTip = nose[3];
 
   const faceWidth = rightJaw.x - leftJaw.x;
   if (faceWidth <= 0) return 0.50;
@@ -124,7 +124,27 @@ function calculateHeadYawRatio(landmarks) {
   return (noseTip.x - leftJaw.x) / faceWidth;
 }
 
-// Extract face descriptor AND 3D head yaw ratio for interactive liveness challenge
+// Calculate 3D Head Pitch Ratio from 68 facial landmarks (0.40 = straight, <0.28 = UP, >0.52 = DOWN)
+function calculateHeadPitchRatio(landmarks) {
+  if (!landmarks) return 0.40;
+  const nose = landmarks.getNose();
+  const jaw = landmarks.getJawOutline();
+  const leftEye = landmarks.getLeftEye();
+  const rightEye = landmarks.getRightEye();
+
+  if (!nose || nose.length < 4 || !jaw || jaw.length < 9 || !leftEye || !rightEye) return 0.40;
+
+  const noseTip = nose[3];
+  const chin = jaw[8];
+  const eyeCenterY = (leftEye[0].y + rightEye[3].y) / 2;
+
+  const faceHeight = chin.y - eyeCenterY;
+  if (faceHeight <= 0) return 0.40;
+
+  return (noseTip.y - eyeCenterY) / faceHeight;
+}
+
+// Extract face descriptor AND 3D head yaw/pitch ratios for interactive liveness challenge
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
@@ -134,10 +154,12 @@ async function extractFaceDetails(videoElement) {
   if (!detection) return null;
 
   const yawRatio = calculateHeadYawRatio(detection.landmarks);
+  const pitchRatio = calculateHeadPitchRatio(detection.landmarks);
 
   return {
     descriptor: Array.from(detection.descriptor),
-    yawRatio
+    yawRatio,
+    pitchRatio
   };
 }
 
@@ -264,7 +286,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Interactive Head Motion Challenge) ──
+// ── STEP 1: Face-First Scan Workflow (Sequential Dynamic Motion Challenge) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -281,15 +303,18 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  // Randomly select Motion Challenge direction to prevent pre-recorded video / photo playback
-  const targetDirection = Math.random() > 0.5 ? 'RIGHT' : 'LEFT';
-  const challengeText = targetDirection === 'RIGHT'
-    ? '➡️ Turn head slightly to your RIGHT'
-    : '⬅️ Turn head slightly to your LEFT';
+  // Select 1 of 4 randomized challenges (RIGHT, LEFT, UP, DOWN)
+  const challenges = [
+    { code: 'RIGHT', label: '➡️ Turn head to your RIGHT' },
+    { code: 'LEFT',  label: '⬅️ Turn head to your LEFT' },
+    { code: 'UP',    label: '⬆️ Tilt head slightly UP' },
+    { code: 'DOWN',  label: '⬇️ Tilt head slightly DOWN' }
+  ];
+  const challenge = challenges[Math.floor(Math.random() * challenges.length)];
 
-  promptEl.textContent = challengeText;
+  promptEl.textContent = '👤 Look straight into camera…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = `Randomised 3D motion challenge: ${challengeText} to verify live presence…`;
+  subtextEl.textContent = 'Step A: Position face in neutral center position…';
 
   const video = document.getElementById('face-video');
   try {
@@ -303,13 +328,15 @@ async function startBiometricScanWorkflow() {
   }
 
   let startTime = Date.now();
+  let centerLocked = false;
+  let centerFrames = 0;
+  let challengeStartTime = 0;
   let verificationAttempts = 0;
-  let motionPassed = false;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 25000) {
+    if (Date.now() - startTime > 30000) {
       subtextEl.textContent = '⚠️ Timed out. Click Try Again.';
       setScanStatus('Biometric verification timed out.', 'error');
       cleanupVerificationView();
@@ -323,47 +350,74 @@ async function startBiometricScanWorkflow() {
         const details = await extractFaceDetails(video);
 
         if (!details) {
-          promptEl.textContent = '👤 Position your face in the camera…';
+          promptEl.textContent = '👤 Position your face in camera…';
           promptEl.style.color = '#fbbf24';
         } else {
-          const { descriptor, yawRatio } = details;
-
-          // 1. Verify Face Identity Descriptor
+          const { descriptor, yawRatio, pitchRatio } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          // 2. Verify Dynamic 3D Head Turn Motion Challenge
-          if (targetDirection === 'RIGHT' && yawRatio > 0.57) {
-            motionPassed = true;
-          } else if (targetDirection === 'LEFT' && yawRatio < 0.43) {
-            motionPassed = true;
-          }
+          const isNeutralCenter = (yawRatio >= 0.44 && yawRatio <= 0.56) && (pitchRatio >= 0.32 && pitchRatio <= 0.48);
 
-          if (!motionPassed) {
-            promptEl.textContent = challengeText;
-            promptEl.style.color = '#fbbf24';
-            subtextEl.textContent = 'Photo/Video anti-spoofing active: Turn your head as prompted above…';
-          } else if (dist < FACE_MATCH_THRESHOLD) {
-            promptEl.textContent = '✓ Live Motion & Face Verified!';
-            promptEl.style.color = '#4ade80';
-            subtextEl.textContent = 'Identity & 3D head motion verified. Opening QR scanner…';
-            setTimeout(async () => {
-              cleanupVerificationView();
-              await openQRScannerCamera();
-            }, 500);
-            return;
-          } else {
-            verificationAttempts++;
-            if (verificationAttempts >= 6) {
-              promptEl.textContent = '❌ Face Not Recognised!';
-              promptEl.style.color = '#f87171';
-              subtextEl.textContent = 'Biometric mismatch. Face does not match registered profile.';
-              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
-              cleanupVerificationView();
-              document.getElementById('scan-prompt').classList.remove('hidden');
-              isProcessing = false;
+          // PHASE A: Require starting in Neutral Center
+          if (!centerLocked) {
+            if (dist < FACE_MATCH_THRESHOLD && isNeutralCenter) {
+              centerFrames++;
+              if (centerFrames >= 2) {
+                centerLocked = true;
+                challengeStartTime = Date.now();
+                promptEl.textContent = challenge.label;
+                promptEl.style.color = '#fbbf24';
+                subtextEl.textContent = `Live Challenge: Perform ${challenge.label} now!`;
+              }
+            } else {
+              centerFrames = 0;
+              if (dist >= FACE_MATCH_THRESHOLD) {
+                verificationAttempts++;
+                if (verificationAttempts >= 6) {
+                  promptEl.textContent = '❌ Face Not Recognised!';
+                  promptEl.style.color = '#f87171';
+                  subtextEl.textContent = 'Face does not match registered profile.';
+                  setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+                  cleanupVerificationView();
+                  document.getElementById('scan-prompt').classList.remove('hidden');
+                  isProcessing = false;
+                  return;
+                }
+              }
+              promptEl.textContent = '👤 Look straight into camera…';
+              promptEl.style.color = '#fbbf24';
+              subtextEl.textContent = 'Align face squarely to initialize anti-spoofing challenge…';
+            }
+          } 
+          // PHASE B: Verify Dynamic Motion Challenge within 5s window
+          else {
+            if (Date.now() - challengeStartTime > 5000) {
+              // Challenge window expired — reset center lock to prevent pre-recorded video alignment
+              centerLocked = false;
+              centerFrames = 0;
+              promptEl.textContent = '👤 Look straight into camera…';
+              subtextEl.textContent = 'Motion challenge window expired. Re-aligning center…';
+              await new Promise(r => setTimeout(r, 400));
+              return;
+            }
+
+            let motionPassed = false;
+            if (challenge.code === 'RIGHT' && yawRatio > 0.57) motionPassed = true;
+            if (challenge.code === 'LEFT'  && yawRatio < 0.43) motionPassed = true;
+            if (challenge.code === 'UP'    && pitchRatio < 0.29) motionPassed = true;
+            if (challenge.code === 'DOWN'  && pitchRatio > 0.51) motionPassed = true;
+
+            if (motionPassed && dist < FACE_MATCH_THRESHOLD) {
+              promptEl.textContent = '✓ Live Motion & Face Verified!';
+              promptEl.style.color = '#4ade80';
+              subtextEl.textContent = '3D Head Motion & Face Verified. Opening QR scanner…';
+              setTimeout(async () => {
+                cleanupVerificationView();
+                await openQRScannerCamera();
+              }, 500);
               return;
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/6) — face camera squarely…`;
+              promptEl.textContent = challenge.label;
               promptEl.style.color = '#fbbf24';
             }
           }
