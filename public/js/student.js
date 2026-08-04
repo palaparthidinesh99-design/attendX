@@ -106,9 +106,8 @@ window.addEventListener('load', () => {
   loadFaceApiModels().catch(err => console.warn('Model preload failed:', err.message));
 });
 
-// Extract a 128-D neural face embedding from a video element.
-// Extract Float32Array → Array descriptor
-async function extractFaceDescriptor(videoElement) {
+// Extract face descriptor + nose tip landmark for passive anti-photo motion liveness
+async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
     .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 }))
@@ -116,7 +115,18 @@ async function extractFaceDescriptor(videoElement) {
     .withFaceDescriptor();
   if (!detection) return null;
 
-  return Array.from(detection.descriptor);
+  const nose = detection.landmarks.getNose();
+
+  return {
+    descriptor: Array.from(detection.descriptor),
+    noseTip: nose && nose.length > 3 ? { x: nose[3].x, y: nose[3].y } : null
+  };
+}
+
+// Extract Float32Array → Array descriptor
+async function extractFaceDescriptor(videoElement) {
+  const details = await extractFaceDetails(videoElement);
+  return details ? details.descriptor : null;
 }
 
 // Euclidean distance between two 128-D descriptors.
@@ -236,7 +246,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Fast Neural Face Verification) ──
+// ── STEP 1: Face-First Scan Workflow (Fast Neural Face Verification + Passive Anti-Photo Liveness) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -271,6 +281,8 @@ async function startBiometricScanWorkflow() {
   let startTime = Date.now();
   let verificationAttempts = 0;
   let matchCount = 0;
+  let prevNoseTip = null;
+  let staticFrameCount = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
@@ -286,16 +298,35 @@ async function startBiometricScanWorkflow() {
 
     if (video.videoWidth > 0) {
       try {
-        const descriptor = await extractFaceDescriptor(video);
+        const details = await extractFaceDetails(video);
 
-        if (!descriptor) {
+        if (!details) {
           promptEl.textContent = '👤 Position your face in camera…';
           promptEl.style.color = '#fbbf24';
           matchCount = 0;
+          staticFrameCount = 0;
         } else {
+          const { descriptor, noseTip } = details;
+
+          // Passive Anti-Photo Liveness: track landmark motion across frames
+          if (noseTip && prevNoseTip) {
+            const movement = Math.hypot(noseTip.x - prevNoseTip.x, noseTip.y - prevNoseTip.y);
+            if (movement < 0.04) {
+              staticFrameCount++;
+            } else {
+              staticFrameCount = Math.max(0, staticFrameCount - 1);
+            }
+          }
+          if (noseTip) prevNoseTip = noseTip;
+
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          if (dist < FACE_MATCH_THRESHOLD) {
+          if (staticFrameCount >= 10) {
+            promptEl.textContent = '⚠️ Static photo detected — please present your live face';
+            promptEl.style.color = '#f87171';
+            subtextEl.textContent = 'Static photo detected. Please use a live camera stream.';
+            matchCount = 0;
+          } else if (dist < FACE_MATCH_THRESHOLD) {
             matchCount++;
             promptEl.textContent = '✓ Face Verified!';
             promptEl.style.color = '#4ade80';
