@@ -106,17 +106,18 @@ window.addEventListener('load', () => {
   loadFaceApiModels().catch(err => console.warn('Model preload failed:', err.message));
 });
 
-// Calculate Mouth Aspect Ratio (MAR) for active liveness action check
-function getMouthMAR(mouthPoints) {
-  if (!mouthPoints || mouthPoints.length < 18) return 0;
+// Calculate Eye Aspect Ratio (EAR) for blink detection
+function getEyeEAR(eyePoints) {
+  if (!eyePoints || eyePoints.length < 6) return 0.3;
   const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
-  const vertical = dist(mouthPoints[13], mouthPoints[17]);
-  const horizontal = dist(mouthPoints[0], mouthPoints[6]);
-  if (horizontal === 0) return 0;
-  return vertical / horizontal;
+  const v1 = dist(eyePoints[1], eyePoints[5]);
+  const v2 = dist(eyePoints[2], eyePoints[4]);
+  const h = dist(eyePoints[0], eyePoints[3]);
+  if (h === 0) return 0.3;
+  return (v1 + v2) / (2.0 * h);
 }
 
-// Extract face descriptor AND Mouth Aspect Ratio (MAR) for active liveness challenge
+// Extract face descriptor AND Eye Aspect Ratio (EAR) for adaptive blink liveness
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
@@ -125,12 +126,15 @@ async function extractFaceDetails(videoElement) {
     .withFaceDescriptor();
   if (!detection) return null;
 
-  const mouth = detection.landmarks.getMouth();
-  const mar = getMouthMAR(mouth);
+  const leftEye = detection.landmarks.getLeftEye();
+  const rightEye = detection.landmarks.getRightEye();
+  const leftEAR = getEyeEAR(leftEye);
+  const rightEAR = getEyeEAR(rightEye);
+  const ear = (leftEAR + rightEAR) / 2.0;
 
   return {
     descriptor: Array.from(detection.descriptor),
-    mar
+    ear
   };
 }
 
@@ -257,7 +261,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Active Action Liveness: Mouth Open) ──
+// ── STEP 1: Face-First Scan Workflow (Adaptive Eye-Blink Liveness Verification) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -274,9 +278,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '😮 Open your mouth slightly to verify live presence…';
+  promptEl.textContent = '👁️ Blink naturally to verify identity…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Active Liveness: Open your mouth slightly to prove live presence (photo anti-spoofing active)…';
+  subtextEl.textContent = 'Standard Liveness: Please blink naturally once to confirm live presence…';
 
   const video = document.getElementById('face-video');
   try {
@@ -290,16 +294,18 @@ async function startBiometricScanWorkflow() {
   }
 
   let startTime = Date.now();
-  let baselineClosedPassed = false;
-  let actionOpenPassed = false;
+  let openEyeBaselineSamples = [];
+  let personalBaselineEAR = null;
+  let blinkClosedPassed = false;
+  let blinkReopenedPassed = false;
   let verificationAttempts = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
     if (Date.now() - startTime > 25000) {
-      subtextEl.textContent = '⚠️ Timed out. Photo detected or action not performed.';
-      setScanStatus('Biometric rejected — static photo detected or action not performed.', 'error');
+      subtextEl.textContent = '⚠️ Timed out. Photo detected or blink not recorded.';
+      setScanStatus('Biometric rejected — static photo detected or liveness blink not recorded.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
@@ -314,7 +320,7 @@ async function startBiometricScanWorkflow() {
           promptEl.textContent = '👤 Position your face in camera…';
           promptEl.style.color = '#fbbf24';
         } else {
-          const { descriptor, mar } = details;
+          const { descriptor, ear } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
           // 1. Identity Check
@@ -334,38 +340,44 @@ async function startBiometricScanWorkflow() {
               promptEl.style.color = '#fbbf24';
             }
           } else {
-            // 2. Active Liveness Action State Machine
-            // Phase A: Baseline (Normal/Closed mouth: MAR < 0.22)
-            if (!baselineClosedPassed) {
-              if (mar < 0.22) {
-                baselineClosedPassed = true;
-                promptEl.textContent = '😮 Now open your mouth slightly…';
-                promptEl.style.color = '#fbbf24';
-              } else {
-                promptEl.textContent = '👤 Close mouth to start liveness check…';
-                promptEl.style.color = '#fbbf24';
+            // 2. Adaptive Personal Eye-Blink Baseline Liveness
+            // Phase A: Collect initial open-eye baseline (3 frames)
+            if (personalBaselineEAR === null) {
+              openEyeBaselineSamples.push(ear);
+              if (openEyeBaselineSamples.length >= 3) {
+                personalBaselineEAR = openEyeBaselineSamples.reduce((a, b) => a + b, 0) / openEyeBaselineSamples.length;
               }
+              promptEl.textContent = '👁️ Blink naturally to verify identity…';
+              promptEl.style.color = '#fbbf24';
             } 
-            // Phase B: Action (Mouth Opened: MAR >= 0.28)
-            else if (!actionOpenPassed) {
-              if (mar >= 0.28) {
-                actionOpenPassed = true;
-              } else {
-                promptEl.textContent = '😮 Open your mouth slightly…';
-                promptEl.style.color = '#fbbf24';
-              }
-            }
+            // Phase B: Detect Eye-Blink relative to personal baseline
+            else {
+              const closeThreshold = personalBaselineEAR * 0.70; // 30% drop in eye ratio
+              const reopenThreshold = personalBaselineEAR * 0.85; // return near baseline
 
-            // Completion: Both Baseline & Action passed + Identity verified
-            if (baselineClosedPassed && actionOpenPassed) {
-              promptEl.textContent = '✓ Live Face Verified!';
-              promptEl.style.color = '#4ade80';
-              subtextEl.textContent = 'Active liveness & identity confirmed. Opening QR scanner…';
-              setTimeout(async () => {
-                cleanupVerificationView();
-                await openQRScannerCamera();
-              }, 400);
-              return;
+              if (!blinkClosedPassed) {
+                if (ear <= closeThreshold) {
+                  blinkClosedPassed = true;
+                  promptEl.textContent = '👁️ Eye blink detected…';
+                  promptEl.style.color = '#fbbf24';
+                }
+              } else if (!blinkReopenedPassed) {
+                if (ear >= reopenThreshold) {
+                  blinkReopenedPassed = true;
+                }
+              }
+
+              // Completion: Personal Blink Sequence completed + Identity verified
+              if (blinkClosedPassed && blinkReopenedPassed) {
+                promptEl.textContent = '✓ Live Face Verified!';
+                promptEl.style.color = '#4ade80';
+                subtextEl.textContent = 'Liveness & identity confirmed. Opening QR scanner…';
+                setTimeout(async () => {
+                  cleanupVerificationView();
+                  await openQRScannerCamera();
+                }, 400);
+                return;
+              }
             }
           }
         }
