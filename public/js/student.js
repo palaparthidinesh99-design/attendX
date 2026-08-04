@@ -327,7 +327,7 @@ async function startBiometricScanWorkflow() {
           // 1. Static Photo Detection (Zero movement across frames)
           if (noseTip && prevNoseTip) {
             const movement = Math.hypot(noseTip.x - prevNoseTip.x, noseTip.y - prevNoseTip.y);
-            if (movement < 0.04) {
+            if (movement < 0.05) {
               staticFrameCount++;
             } else {
               staticFrameCount = Math.max(0, staticFrameCount - 1);
@@ -343,8 +343,7 @@ async function startBiometricScanWorkflow() {
             const avg = ratioBuffer.reduce((a, b) => a + b, 0) / ratioBuffer.length;
             const variance = ratioBuffer.reduce((sum, r) => sum + (r - avg) ** 2, 0) / ratioBuffer.length;
 
-            // If object is moving in frame but 2D feature ratio variance is 0.00000 (flat 2D object scaling)
-            if (staticFrameCount === 0 && variance < 0.000002) {
+            if (variance < 0.000003) {
               rigidPhotoCount++;
             } else {
               rigidPhotoCount = Math.max(0, rigidPhotoCount - 1);
@@ -353,23 +352,22 @@ async function startBiometricScanWorkflow() {
 
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          if (staticFrameCount >= 10) {
-            promptEl.textContent = '⚠️ Static photo detected — please present your live face';
-            promptEl.style.color = '#f87171';
-            subtextEl.textContent = 'Static photo detected. Please use a live camera stream.';
+          // Reject photo if static frames or 2D rigid plane scaling detected
+          if (staticFrameCount >= 4 || rigidPhotoCount >= 4) {
             matchCount = 0;
-          } else if (rigidPhotoCount >= 8) {
-            promptEl.textContent = '⚠️ Screen video / moving photo detected';
+            promptEl.textContent = '⚠️ Photo detected — please present your live face';
             promptEl.style.color = '#f87171';
-            subtextEl.textContent = '2D screen video playback detected. Please use live camera.';
-            matchCount = 0;
+            subtextEl.textContent = 'Photo/Screen spoof detected. Please present your live face to the camera.';
           } else if (dist < FACE_MATCH_THRESHOLD) {
             matchCount++;
-            promptEl.textContent = '✓ Face Verified!';
-            promptEl.style.color = '#4ade80';
-            subtextEl.textContent = 'Identity confirmed. Opening QR scanner…';
-            
-            if (matchCount >= 2) {
+            promptEl.textContent = `Analyzing liveness & identity (${matchCount}/8)…`;
+            promptEl.style.color = '#fbbf24';
+
+            // Require 8 consecutive clean frames (1.6s) to ensure full liveness evaluation
+            if (matchCount >= 8) {
+              promptEl.textContent = '✓ Live Face Verified!';
+              promptEl.style.color = '#4ade80';
+              subtextEl.textContent = 'Identity & liveness confirmed. Opening QR scanner…';
               setTimeout(async () => {
                 cleanupVerificationView();
                 await openQRScannerCamera();
@@ -379,7 +377,7 @@ async function startBiometricScanWorkflow() {
           } else {
             matchCount = 0;
             verificationAttempts++;
-            if (verificationAttempts >= 8) {
+            if (verificationAttempts >= 12) {
               promptEl.textContent = '❌ Face Not Recognised!';
               promptEl.style.color = '#f87171';
               subtextEl.textContent = 'Face does not match registered profile.';
@@ -389,7 +387,7 @@ async function startBiometricScanWorkflow() {
               isProcessing = false;
               return;
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/8) — hold still…`;
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/12) — hold still…`;
               promptEl.style.color = '#fbbf24';
             }
           }
