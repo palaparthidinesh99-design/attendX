@@ -29,6 +29,12 @@ let qrPollInterval = null;
 let attendancePollInterval = null;
 let countdownInterval = null;
 let qrCodeInstance = null;
+let popoutWindow = null;
+let popoutQRInstance = null;
+let lastQRPayload = '';
+let currentLiveCount = 0;
+let pipVideo = null;
+let pipCanvas = null;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 function authHeaders() {
@@ -466,6 +472,7 @@ async function fetchAndRenderQR() {
 }
 
 function renderQR(payload) {
+  lastQRPayload = payload;
   const container = document.getElementById('qr-code-display');
 
   if (qrCodeInstance) {
@@ -482,6 +489,9 @@ function renderQR(payload) {
       correctLevel: QRCode.CorrectLevel.M
     });
   }
+
+  updatePopoutQR(payload);
+  if (document.pictureInPictureElement) drawCanvasQR();
 }
 
 // ── Countdown Timer ─────────────────────────────────────────────────────
@@ -512,6 +522,199 @@ function updateCountdownUI() {
     const pct = (countdownValue / 15) * 100;
     bar.style.width = pct + '%';
   }
+
+  if (popoutWindow && !popoutWindow.closed) {
+    try {
+      const popEl = popoutWindow.document.getElementById('pop-timer-text');
+      const popBar = popoutWindow.document.getElementById('pop-timer-fill');
+      if (popEl) popEl.textContent = countdownValue;
+      if (popBar) popBar.style.width = ((countdownValue / 15) * 100) + '%';
+    } catch (_) {}
+  }
+
+  if (document.pictureInPictureElement) drawCanvasQR();
+}
+
+// ── Pop-out Mini Floating QR Window & PiP Controls ──────────────────────
+function openPopoutQRWindow() {
+  if (!activeSessionId) return alert('No active attendance session.');
+
+  if (popoutWindow && !popoutWindow.closed) {
+    popoutWindow.focus();
+    return;
+  }
+
+  const className = document.getElementById('active-class-name')?.textContent || 'Attendance QR';
+  const courseCode = selectedCourse ? selectedCourse.courseCode : '';
+  const width = 340;
+  const height = 440;
+  const left = Math.max(0, window.screen.width - width - 50);
+  const top = 60;
+
+  popoutWindow = window.open(
+    '',
+    'AttendX_Popout_QR',
+    `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=no,status=no`
+  );
+
+  if (!popoutWindow) {
+    alert('Pop-up was blocked by browser. Please allow pop-ups for AttendX to use Floating QR.');
+    return;
+  }
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>🎯 AttendX — Floating QR</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 1rem;
+      background: #090d16; color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      text-align: center; user-select: none;
+      display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+      height: 100vh;
+    }
+    .badge {
+      display: inline-block; padding: 0.25rem 0.6rem;
+      background: rgba(34,197,94,0.15); color: #4ade80;
+      border: 1px solid rgba(34,197,94,0.3); border-radius: 4px;
+      font-size: 0.72rem; font-weight: 700; letter-spacing: 0.5px;
+    }
+    h3 { margin: 0.35rem 0 0.1rem; font-size: 1.05rem; color: #ffffff; }
+    p { margin: 0 0 0.6rem; font-size: 0.78rem; color: #94a3b8; }
+    .qr-frame {
+      background: #ffffff; padding: 0.75rem; border-radius: 8px;
+      display: inline-block; box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+    }
+    #popout-qr-display img, #popout-qr-display canvas { display: block; margin: 0 auto; }
+    .timer-container { width: 100%; max-width: 240px; margin: 0.5rem auto 0; }
+    .timer-bar-bg {
+      width: 100%; height: 5px; background: rgba(255,255,255,0.1);
+      border-radius: 3px; overflow: hidden;
+    }
+    .timer-bar-fill {
+      height: 100%; background: #6366f1; transition: width 1s linear; width: 100%;
+    }
+    .timer-text { font-size: 0.75rem; color: #94a3b8; margin-top: 0.25rem; }
+    .live-count {
+      width: 100%; padding: 0.5rem;
+      background: #1e293b; border: 1px solid #334155; border-radius: 6px;
+      font-size: 0.85rem; font-weight: 600; color: #38bdf8;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+  <div>
+    <span class="badge">🔴 LIVE QR SESSION</span>
+    <h3>${className}</h3>
+    <p>${courseCode ? courseCode + ' — ' : ''}Scan to mark attendance</p>
+  </div>
+
+  <div class="qr-frame">
+    <div id="popout-qr-display"></div>
+  </div>
+
+  <div class="timer-container">
+    <div class="timer-bar-bg">
+      <div class="timer-bar-fill" id="pop-timer-fill"></div>
+    </div>
+    <div class="timer-text">Refreshes in <strong id="pop-timer-text">15</strong>s</div>
+  </div>
+
+  <div class="live-count" id="pop-live-count">👥 ${currentLiveCount} Student${currentLiveCount === 1 ? '' : 's'} Checked In</div>
+</body>
+</html>`;
+
+  popoutWindow.document.open();
+  popoutWindow.document.write(html);
+  popoutWindow.document.close();
+
+  popoutQRInstance = null;
+  setTimeout(() => {
+    if (lastQRPayload) updatePopoutQR(lastQRPayload);
+    updateCountdownUI();
+  }, 350);
+}
+
+function updatePopoutQR(payload) {
+  if (!popoutWindow || popoutWindow.closed) return;
+  try {
+    const container = popoutWindow.document.getElementById('popout-qr-display');
+    if (!container) return;
+
+    if (popoutQRInstance) {
+      popoutQRInstance.clear();
+      popoutQRInstance.makeCode(payload);
+    } else if (popoutWindow.QRCode) {
+      container.innerHTML = '';
+      popoutQRInstance = new popoutWindow.QRCode(container, {
+        text: payload,
+        width: 180,
+        height: 180,
+        colorDark: '#000000',
+        colorLight: '#ffffff',
+        correctLevel: popoutWindow.QRCode.CorrectLevel.M
+      });
+    }
+  } catch (err) {
+    console.warn('Popout QR update error:', err);
+  }
+}
+
+async function togglePictureInPictureQR() {
+  if (!activeSessionId) return alert('No active attendance session.');
+
+  if (document.pictureInPictureElement) {
+    await document.exitPictureInPicture();
+    return;
+  }
+
+  try {
+    if (!pipCanvas) {
+      pipCanvas = document.createElement('canvas');
+      pipCanvas.width = 300;
+      pipCanvas.height = 300;
+    }
+
+    if (!pipVideo) {
+      pipVideo = document.createElement('video');
+      pipVideo.muted = true;
+      pipVideo.srcObject = pipCanvas.captureStream(10);
+      await pipVideo.play();
+    }
+
+    drawCanvasQR();
+    await pipVideo.requestPictureInPicture();
+  } catch (err) {
+    alert('Picture-in-Picture error: ' + (err.message || 'Not supported by browser. Use Pop-out Mini Window instead.'));
+  }
+}
+
+function drawCanvasQR() {
+  if (!pipCanvas) return;
+  const ctx = pipCanvas.getContext('2d');
+  ctx.fillStyle = '#090d16';
+  ctx.fillRect(0, 0, 300, 300);
+
+  const mainQRImg = document.querySelector('#qr-code-display img') || document.querySelector('#qr-code-display canvas');
+  if (mainQRImg) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(45, 45, 210, 210);
+    ctx.drawImage(mainQRImg, 50, 50, 200, 200);
+  }
+
+  ctx.fillStyle = '#4ade80';
+  ctx.font = 'bold 13px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('AttendX Live QR', 150, 25);
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(`Refreshes in ${countdownValue}s | ${currentLiveCount} Present`, 150, 285);
 }
 
 // ── Attendance Polling & Rendering ──────────────────────────────────────
@@ -540,11 +743,19 @@ async function fetchAttendance() {
 }
 
 function renderAttendance(records, count, className) {
+  currentLiveCount = count || 0;
   document.getElementById('present-count').textContent = count;
   document.getElementById('export-csv-btn').disabled = count === 0;
 
   if (className) {
     document.getElementById('attendance-subtitle').textContent = `Check-ins for: ${className}`;
+  }
+
+  if (popoutWindow && !popoutWindow.closed) {
+    try {
+      const popCount = popoutWindow.document.getElementById('pop-live-count');
+      if (popCount) popCount.textContent = `👥 ${currentLiveCount} Student${currentLiveCount === 1 ? '' : 's'} Checked In`;
+    } catch (_) {}
   }
 
   if (!records || records.length === 0) {
@@ -616,6 +827,14 @@ function stopPolling() {
   if (attendancePollInterval) clearInterval(attendancePollInterval);
   if (countdownInterval)     clearInterval(countdownInterval);
   qrPollInterval = attendancePollInterval = countdownInterval = null;
+
+  if (popoutWindow && !popoutWindow.closed) {
+    try { popoutWindow.close(); } catch (_) {}
+    popoutWindow = null;
+  }
+  if (document.pictureInPictureElement) {
+    try { document.exitPictureInPicture(); } catch (_) {}
+  }
 }
 
 // Global Exports
@@ -625,6 +844,8 @@ window.showEnrollModal = showEnrollModal;
 window.hideEnrollModal = hideEnrollModal;
 window.showCoursesList = showCoursesList;
 window.openCourseWorkspace = openCourseWorkspace;
+window.openPopoutQRWindow = openPopoutQRWindow;
+window.togglePictureInPictureQR = togglePictureInPictureQR;
 window.exportCSV = exportCSV;
 window.logout = logout;
 
@@ -640,6 +861,8 @@ function bindEventListeners() {
   document.getElementById('demo-location-btn')?.addEventListener('click', fillDemoLocation);
   document.getElementById('start-session-btn')?.addEventListener('click', startSession);
   document.getElementById('end-session-btn')?.addEventListener('click', endSession);
+  document.getElementById('btn-popout-qr')?.addEventListener('click', openPopoutQRWindow);
+  document.getElementById('btn-pip-qr')?.addEventListener('click', togglePictureInPictureQR);
   document.getElementById('export-csv-btn')?.addEventListener('click', exportCSV);
   document.getElementById('logout-btn')?.addEventListener('click', logout);
 
