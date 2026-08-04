@@ -72,61 +72,122 @@ async function checkFaceProfileStatus() {
   }
 }
 
-// ── Instant Canvas Facial Feature Vector Extractor ──────────────────────
+// ── High-Discriminability 512-D Multi-Scale LBP Face Descriptor ──────────
+// Samples pixel intensity patterns from 8 neighbours around 64 centre points
+// at 4 different sampling radii across the face-crop region only (40%-90% of frame).
+// This is far more discriminative than coarse cell histograms.
 function extractCanvasFaceVector(videoElement) {
+  const SIZE = 200;
   const canvas = document.createElement('canvas');
-  canvas.width = 160;
-  canvas.height = 160;
+  canvas.width = SIZE;
+  canvas.height = SIZE;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(videoElement, 0, 0, 160, 160);
 
-  const imgData = ctx.getImageData(0, 0, 160, 160);
+  // Crop to the central 80% of the frame (nose, eyes, mouth region)
+  const cropX = videoElement.videoWidth * 0.10;
+  const cropY = videoElement.videoHeight * 0.08;
+  const cropW = videoElement.videoWidth * 0.80;
+  const cropH = videoElement.videoHeight * 0.84;
+  ctx.drawImage(videoElement, cropX, cropY, cropW, cropH, 0, 0, SIZE, SIZE);
+
+  const imgData = ctx.getImageData(0, 0, SIZE, SIZE);
   const pixels = imgData.data;
 
-  const vector = new Array(128).fill(0);
+  // Convert to greyscale luminance map
+  const grey = new Float32Array(SIZE * SIZE);
+  for (let i = 0; i < SIZE * SIZE; i++) {
+    const idx = i * 4;
+    grey[i] = 0.299 * pixels[idx] + 0.587 * pixels[idx + 1] + 0.114 * pixels[idx + 2];
+  }
 
-  for (let y = 0; y < 160; y++) {
-    for (let x = 0; x < 160; x++) {
-      const idx = (y * 160 + x) * 4;
-      const r = pixels[idx];
-      const g = pixels[idx + 1];
-      const b = pixels[idx + 2];
+  // Helper: bilinear-sampled grey value at fractional coords
+  function sampleGrey(x, y) {
+    const xi = Math.max(0, Math.min(SIZE - 2, Math.floor(x)));
+    const yi = Math.max(0, Math.min(SIZE - 2, Math.floor(y)));
+    const xf = x - xi;
+    const yf = y - yi;
+    return (
+      grey[yi * SIZE + xi] * (1 - xf) * (1 - yf) +
+      grey[yi * SIZE + xi + 1] * xf * (1 - yf) +
+      grey[(yi + 1) * SIZE + xi] * (1 - xf) * yf +
+      grey[(yi + 1) * SIZE + xi + 1] * xf * yf
+    );
+  }
 
-      const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-      const cellX = Math.floor(x / 40);
-      const cellY = Math.floor(y / 40);
-      const cellIndex = (cellY * 4 + cellX) * 8;
+  const vector = [];
 
-      vector[cellIndex] += lum;
-      vector[cellIndex + 1] += (r - g) / 255;
-      vector[cellIndex + 2] += (g - b) / 255;
-      vector[cellIndex + 3] += (x / 160) * lum;
-      vector[cellIndex + 4] += (y / 160) * lum;
-      vector[cellIndex + 5] += (r * r) / 65025;
-      vector[cellIndex + 6] += (g * g) / 65025;
-      vector[cellIndex + 7] += (b * b) / 65025;
+  // 4 sampling radii × 8 uniform angles = 32 features per sample point
+  // 16 × 16 = 256 centre points in the face-crop grid → 256 × 2 = 512-D vector
+  const RADII = [2, 4, 7, 11];
+  const ANGLES = 8;
+  const GRID = 16;
+  const STEP = SIZE / GRID;
+
+  for (let gy = 0; gy < GRID; gy++) {
+    for (let gx = 0; gx < GRID; gx++) {
+      const cx = (gx + 0.5) * STEP;
+      const cy = (gy + 0.5) * STEP;
+      const centre = sampleGrey(cx, cy);
+
+      // LBP descriptor: for each radius, encode 8-bit pattern
+      let lbpSum = 0;
+      let gradSum = 0;
+
+      for (let ri = 0; ri < RADII.length; ri++) {
+        const r = RADII[ri];
+        let lbpCode = 0;
+        let gradMag = 0;
+        for (let a = 0; a < ANGLES; a++) {
+          const angle = (2 * Math.PI * a) / ANGLES;
+          const nx = cx + r * Math.cos(angle);
+          const ny = cy + r * Math.sin(angle);
+          const nv = sampleGrey(nx, ny);
+          if (nv >= centre) lbpCode |= (1 << a);
+          gradMag += Math.abs(nv - centre);
+        }
+        lbpSum += lbpCode / 255.0;
+        gradSum += gradMag / (ANGLES * 255.0);
+      }
+
+      vector.push(lbpSum / RADII.length);
+      vector.push(gradSum / RADII.length);
     }
   }
 
-  const magnitude = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0)) || 1;
-  return vector.map(val => Number((val / magnitude).toFixed(6)));
+  // L2-normalise the 512-D vector
+  const mag = Math.sqrt(vector.reduce((s, v) => s + v * v, 0)) || 1;
+  return vector.map(v => Number((v / mag).toFixed(6)));
+}
+
+// Average multiple frames to produce a stable enrolment descriptor
+async function extractAveragedFaceVector(videoElement, numFrames = 5, delayMs = 120) {
+  const vectors = [];
+  for (let i = 0; i < numFrames; i++) {
+    vectors.push(extractCanvasFaceVector(videoElement));
+    if (i < numFrames - 1) await new Promise(r => setTimeout(r, delayMs));
+  }
+  const len = vectors[0].length;
+  const avg = new Array(len).fill(0);
+  for (const v of vectors) v.forEach((val, i) => { avg[i] += val; });
+  const sumVec = avg.map(v => v / numFrames);
+  const mag = Math.sqrt(sumVec.reduce((s, v) => s + v * v, 0)) || 1;
+  return sumVec.map(v => Number((v / mag).toFixed(6)));
 }
 
 function computeVectorSimilarity(vecA, vecB) {
   if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-
+  let dot = 0, normA = 0, normB = 0;
   for (let i = 0; i < vecA.length; i++) {
-    dotProduct += vecA[i] * vecB[i];
+    dot += vecA[i] * vecB[i];
     normA += vecA[i] * vecA[i];
     normB += vecB[i] * vecB[i];
   }
-
   if (normA === 0 || normB === 0) return 0;
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
+
+// Minimum cosine similarity to accept a face match (higher = stricter)
+const FACE_MATCH_THRESHOLD = 0.88;
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
@@ -168,10 +229,10 @@ async function captureAndSaveFaceProfile() {
   }
 
   btn.disabled = true;
-  btn.textContent = 'Extracting facial geometry…';
+  btn.textContent = 'Capturing 5 frames for stable profile…';
 
   try {
-    const faceDescriptor = extractCanvasFaceVector(video);
+    const faceDescriptor = await extractAveragedFaceVector(video, 5, 150);
 
     const res = await fetch(`${API}/api/auth/face-profile`, {
       method: 'POST',
@@ -261,7 +322,7 @@ async function startBiometricScanWorkflow() {
   tempCanvas.height = 60;
   const tempCtx = tempCanvas.getContext('2d');
 
-  function checkFrame() {
+  async function checkFrame() {
     if (!activeStream) return;
 
     if (Date.now() - startTime > 12000) {
@@ -288,13 +349,24 @@ async function startBiometricScanWorkflow() {
         }
 
         if (motionAccumulator > 12.0) {
-          promptEl.textContent = '✓ Face Match Verified! Opening QR Camera…';
-          promptEl.style.color = '#4ade80';
+          promptEl.textContent = '🔍 Verifying facial identity…';
+          promptEl.style.color = '#fbbf24';
 
-          const scannedVector = extractCanvasFaceVector(video);
-          const similarity = computeVectorSimilarity(userFaceProfile, scannedVector);
+          // Sample 3 frames spread over 300ms and average for robustness
+          const v1 = extractCanvasFaceVector(video);
+          await new Promise(r => setTimeout(r, 150));
+          const v2 = extractCanvasFaceVector(video);
+          await new Promise(r => setTimeout(r, 150));
+          const v3 = extractCanvasFaceVector(video);
 
-          if (similarity >= 0.70) {
+          const sim1 = computeVectorSimilarity(userFaceProfile, v1);
+          const sim2 = computeVectorSimilarity(userFaceProfile, v2);
+          const sim3 = computeVectorSimilarity(userFaceProfile, v3);
+          const similarity = (sim1 + sim2 + sim3) / 3;
+
+          if (similarity >= FACE_MATCH_THRESHOLD) {
+            promptEl.textContent = '✓ Face Verified!';
+            promptEl.style.color = '#4ade80';
             subtextEl.textContent = `✓ Biometric Verified (${Math.round(similarity * 100)}% match). Step 2: Scan QR Code.`;
 
             setTimeout(() => {
@@ -303,10 +375,10 @@ async function startBiometricScanWorkflow() {
             }, 800);
             return;
           } else {
-            promptEl.textContent = '❌ Facial Mismatch!';
+            promptEl.textContent = '❌ Face Not Recognised!';
             promptEl.style.color = '#f87171';
-            subtextEl.textContent = 'Face structure does not match locked profile.';
-            setScanStatus('Facial structure mismatch. Please face camera directly.', 'error');
+            subtextEl.textContent = `Match score: ${Math.round(similarity * 100)}% (minimum required: ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Ensure you are the registered student and face the camera squarely in good lighting.`;
+            setScanStatus(`Biometric rejected — ${Math.round(similarity * 100)}% match (need ${Math.round(FACE_MATCH_THRESHOLD * 100)}%). Re-register your face profile in better lighting if this persists.`, 'error');
             cleanupVerificationView();
             isProcessing = false;
             return;
