@@ -117,19 +117,54 @@ function getEyeEAR(eyePoints) {
   return (v1 + v2) / (2.0 * h);
 }
 
-// Extract 128-D neural face descriptor with strict 68-landmark integrity check
-async function extractFaceDescriptor(videoElement) {
+// Calculate Laplacian Pixel Texture Variance to detect flat paper/screen surfaces
+function calculateTextureVariance(videoElement, detection) {
+  if (!detection || !detection.detection) return 100;
+  const box = detection.detection.box;
+  if (!box || box.width < 40 || box.height < 40) return 100;
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(box.width);
+    canvas.height = Math.floor(box.height);
+    const ctx = canvas.getContext('2d');
+    
+    ctx.drawImage(
+      videoElement,
+      Math.floor(box.x), Math.floor(box.y), Math.floor(box.width), Math.floor(box.height),
+      0, 0, canvas.width, canvas.height
+    );
+
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = imgData.data;
+    let sum = 0, sqSum = 0, count = 0;
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      const gray = 0.299 * pixels[i] + 0.587 * pixels[i+1] + 0.114 * pixels[i+2];
+      sum += gray;
+      sqSum += gray * gray;
+      count++;
+    }
+    if (count === 0) return 100;
+    const mean = sum / count;
+    return (sqSum / count) - (mean * mean);
+  } catch {
+    return 100;
+  }
+}
+
+// Extract 128-D descriptor, 68 landmarks, texture variance, EAR, and head yaw ratio
+async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   
-  // High confidence threshold (0.85) to reject partial, blurry, or cropped faces
   const detection = await faceapi
-    .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.85 }))
+    .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.75 }))
     .withFaceLandmarks()
     .withFaceDescriptor();
     
   if (!detection) return null;
 
-  // Strict 68-landmark completeness check (reject half-head or partial face)
+  // Strict 68-landmark completeness check
   const landmarks = detection.landmarks;
   if (!landmarks || landmarks.positions.length < 68) return null;
 
@@ -141,18 +176,33 @@ async function extractFaceDescriptor(videoElement) {
 
   if (!jaw || jaw.length < 17 || !leftEye || leftEye.length < 6 || 
       !rightEye || rightEye.length < 6 || !nose || nose.length < 4 || !mouth || mouth.length < 18) {
-    return null; // Reject partial face or missing facial features
+    return null; // Reject partial face or half-head
   }
 
-  // Ensure face covers proper proportion of camera frame (20% - 75% width)
+  const textureVariance = calculateTextureVariance(videoElement, detection);
+
+  // Head Yaw Ratio (0.50 = straight, >0.58 = right, <0.42 = left)
   const faceWidth = jaw[16].x - jaw[0].x;
-  const frameWidth = videoElement.videoWidth || 320;
-  const ratio = faceWidth / frameWidth;
-  if (ratio < 0.20 || ratio > 0.75) {
-    return null; // Reject distant or over-cropped face photos
-  }
+  const yawRatio = faceWidth > 0 ? (nose[3].x - jaw[0].x) / faceWidth : 0.50;
 
-  return Array.from(detection.descriptor);
+  // Eye Aspect Ratio (EAR) for eye blink
+  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+  const leftEAR = (dist(leftEye[1], leftEye[5]) + dist(leftEye[2], leftEye[4])) / (2 * dist(leftEye[0], leftEye[3]));
+  const rightEAR = (dist(rightEye[1], rightEye[5]) + dist(rightEye[2], rightEye[4])) / (2 * dist(rightEye[0], rightEye[3]));
+  const avgEAR = (leftEAR + rightEAR) / 2.0;
+
+  return {
+    descriptor: Array.from(detection.descriptor),
+    textureVariance,
+    yawRatio,
+    avgEAR
+  };
+}
+
+// Extract Float32Array → Array descriptor
+async function extractFaceDescriptor(videoElement) {
+  const details = await extractFaceDetails(videoElement);
+  return details ? details.descriptor : null;
 }
 
 // Euclidean distance between two 128-D descriptors.
@@ -163,8 +213,8 @@ function faceDistance(descA, descB) {
   return Math.sqrt(sum);
 }
 
-// Strict match threshold: euclidean distance < 0.40 (99.9% exact identity match)
-const FACE_MATCH_THRESHOLD = 0.40;
+// Strict match threshold: euclidean distance < 0.42
+const FACE_MATCH_THRESHOLD = 0.42;
 
 // ── Face Profile Enrollment Modal ───────────────────────────────────────
 function openFaceEnrollmentModal() {
@@ -272,7 +322,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Strict Biometric Verification) ──
+// ── STEP 1: Face-First Scan Workflow (Multi-Layer Texture & Randomized Action Liveness) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -290,9 +340,17 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👤 Center your full face in camera…';
+  // Generate randomized action challenge at runtime
+  const challenges = [
+    { code: 'BLINK', label: '👁️ Blink both eyes once' },
+    { code: 'RIGHT', label: '➡️ Turn head slightly RIGHT' },
+    { code: 'LEFT',  label: '⬅️ Turn head slightly LEFT' }
+  ];
+  const activeChallenge = challenges[Math.floor(Math.random() * challenges.length)];
+
+  promptEl.textContent = activeChallenge.label;
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Verifying full facial structure against registered profile…';
+  subtextEl.textContent = `Randomized Action Challenge: Perform ${activeChallenge.label} to verify live presence…`;
 
   const video = document.getElementById('face-video');
   try {
@@ -307,14 +365,15 @@ async function startBiometricScanWorkflow() {
 
   let startTime = Date.now();
   let verificationAttempts = 0;
-  let matchConfirmations = 0;
+  let blinkClosed = false;
+  let challengePassed = false;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 15000) {
-      subtextEl.textContent = '⚠️ Timed out. Click Try Again.';
-      setScanStatus('Biometric verification timed out.', 'error');
+    if (Date.now() - startTime > 25000) {
+      subtextEl.textContent = '⚠️ Timed out. Photo/Video detected or challenge not performed.';
+      setScanStatus('Biometric rejected — static photo/screen detected or liveness challenge failed.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
@@ -323,45 +382,62 @@ async function startBiometricScanWorkflow() {
 
     if (video.videoWidth > 0) {
       try {
-        const descriptor = await extractFaceDescriptor(video);
+        const details = await extractFaceDetails(video);
 
-        if (!descriptor) {
+        if (!details) {
           promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
-          matchConfirmations = 0;
         } else {
-          const dist = faceDistance(userFaceProfile, descriptor);
+          const { descriptor, textureVariance, yawRatio, avgEAR } = details;
 
-          if (dist < FACE_MATCH_THRESHOLD) {
-            matchConfirmations++;
-            promptEl.textContent = `Analyzing identity (${matchConfirmations}/4)…`;
-            promptEl.style.color = '#fbbf24';
-
-            if (matchConfirmations >= 4) {
-              promptEl.textContent = '✓ Full Face Verified!';
-              promptEl.style.color = '#4ade80';
-              subtextEl.textContent = 'Identity confirmed. Opening QR scanner…';
-              setTimeout(async () => {
-                cleanupVerificationView();
-                await openQRScannerCamera();
-              }, 300);
-              return;
-            }
+          // 1. Texture Blur Analysis (Detect flat paper photo or screen display)
+          if (textureVariance < 12.0) {
+            promptEl.textContent = '⚠️ Flat photo / screen texture detected';
+            promptEl.style.color = '#f87171';
+            subtextEl.textContent = 'Texture analysis detected flat paper or screen surface. Present live face.';
           } else {
-            matchConfirmations = 0;
-            verificationAttempts++;
-            if (verificationAttempts >= 10) {
-              promptEl.textContent = '❌ Face Not Recognised!';
-              promptEl.style.color = '#f87171';
-              subtextEl.textContent = 'Face does not match registered student profile.';
-              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
-              cleanupVerificationView();
-              document.getElementById('scan-prompt').classList.remove('hidden');
-              isProcessing = false;
-              return;
+            // 2. Identity Check
+            const dist = faceDistance(userFaceProfile, descriptor);
+
+            if (dist >= FACE_MATCH_THRESHOLD) {
+              verificationAttempts++;
+              if (verificationAttempts >= 10) {
+                promptEl.textContent = '❌ Face Not Recognised!';
+                promptEl.style.color = '#f87171';
+                subtextEl.textContent = 'Face does not match registered student profile.';
+                setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+                cleanupVerificationView();
+                document.getElementById('scan-prompt').classList.remove('hidden');
+                isProcessing = false;
+                return;
+              } else {
+                promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
+                promptEl.style.color = '#fbbf24';
+              }
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
-              promptEl.style.color = '#fbbf24';
+              // 3. Evaluate Randomized Action Challenge
+              if (activeChallenge.code === 'BLINK') {
+                if (avgEAR < 0.21) blinkClosed = true;
+                if (blinkClosed && avgEAR >= 0.25) challengePassed = true;
+              } else if (activeChallenge.code === 'RIGHT') {
+                if (yawRatio > 0.57) challengePassed = true;
+              } else if (activeChallenge.code === 'LEFT') {
+                if (yawRatio < 0.43) challengePassed = true;
+              }
+
+              if (challengePassed) {
+                promptEl.textContent = '✓ Live Face & Texture Verified!';
+                promptEl.style.color = '#4ade80';
+                subtextEl.textContent = 'Liveness & identity confirmed. Opening QR scanner…';
+                setTimeout(async () => {
+                  cleanupVerificationView();
+                  await openQRScannerCamera();
+                }, 400);
+                return;
+              } else {
+                promptEl.textContent = activeChallenge.label;
+                promptEl.style.color = '#fbbf24';
+              }
             }
           }
         }
@@ -370,7 +446,7 @@ async function startBiometricScanWorkflow() {
       }
     }
 
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise(r => setTimeout(r, 200));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
