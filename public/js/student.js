@@ -106,7 +106,7 @@ window.addEventListener('load', () => {
   loadFaceApiModels().catch(err => console.warn('Model preload failed:', err.message));
 });
 
-// Extract face descriptor + nose tip landmark for passive anti-photo motion liveness
+// Extract face descriptor, nose tip, and 3D feature ratio for liveness analysis
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   const detection = await faceapi
@@ -115,11 +115,23 @@ async function extractFaceDetails(videoElement) {
     .withFaceDescriptor();
   if (!detection) return null;
 
-  const nose = detection.landmarks.getNose();
+  const landmarks = detection.landmarks;
+  const nose = landmarks.getNose();
+  const leftEye = landmarks.getLeftEye();
+  const rightEye = landmarks.getRightEye();
+  const jaw = landmarks.getJawOutline();
+
+  let featureRatio = 0.35;
+  if (leftEye && rightEye && jaw && jaw.length >= 17) {
+    const eyeDist = Math.hypot(leftEye[0].x - rightEye[3].x, leftEye[0].y - rightEye[3].y);
+    const jawWidth = Math.hypot(jaw[0].x - jaw[16].x, jaw[0].y - jaw[16].y);
+    if (jawWidth > 0) featureRatio = eyeDist / jawWidth;
+  }
 
   return {
     descriptor: Array.from(detection.descriptor),
-    noseTip: nose && nose.length > 3 ? { x: nose[3].x, y: nose[3].y } : null
+    noseTip: nose && nose.length > 3 ? { x: nose[3].x, y: nose[3].y } : null,
+    featureRatio
   };
 }
 
@@ -246,7 +258,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Fast Neural Face Verification + Passive Anti-Photo Liveness) ──
+// ── STEP 1: Face-First Scan Workflow (Neural Face Match + Anti-Video/Photo Liveness) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -283,6 +295,8 @@ async function startBiometricScanWorkflow() {
   let matchCount = 0;
   let prevNoseTip = null;
   let staticFrameCount = 0;
+  let ratioBuffer = [];
+  let rigidPhotoCount = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
@@ -305,10 +319,12 @@ async function startBiometricScanWorkflow() {
           promptEl.style.color = '#fbbf24';
           matchCount = 0;
           staticFrameCount = 0;
+          rigidPhotoCount = 0;
+          ratioBuffer = [];
         } else {
-          const { descriptor, noseTip } = details;
+          const { descriptor, noseTip, featureRatio } = details;
 
-          // Passive Anti-Photo Liveness: track landmark motion across frames
+          // 1. Static Photo Detection (Zero movement across frames)
           if (noseTip && prevNoseTip) {
             const movement = Math.hypot(noseTip.x - prevNoseTip.x, noseTip.y - prevNoseTip.y);
             if (movement < 0.04) {
@@ -319,12 +335,33 @@ async function startBiometricScanWorkflow() {
           }
           if (noseTip) prevNoseTip = noseTip;
 
+          // 2. Moving Photo / Screen Video Playback Detection (Zero 3D non-rigid variance)
+          ratioBuffer.push(featureRatio);
+          if (ratioBuffer.length > 5) ratioBuffer.shift();
+
+          if (ratioBuffer.length >= 5) {
+            const avg = ratioBuffer.reduce((a, b) => a + b, 0) / ratioBuffer.length;
+            const variance = ratioBuffer.reduce((sum, r) => sum + (r - avg) ** 2, 0) / ratioBuffer.length;
+
+            // If object is moving in frame but 2D feature ratio variance is 0.00000 (flat 2D object scaling)
+            if (staticFrameCount === 0 && variance < 0.000002) {
+              rigidPhotoCount++;
+            } else {
+              rigidPhotoCount = Math.max(0, rigidPhotoCount - 1);
+            }
+          }
+
           const dist = faceDistance(userFaceProfile, descriptor);
 
           if (staticFrameCount >= 10) {
             promptEl.textContent = '⚠️ Static photo detected — please present your live face';
             promptEl.style.color = '#f87171';
             subtextEl.textContent = 'Static photo detected. Please use a live camera stream.';
+            matchCount = 0;
+          } else if (rigidPhotoCount >= 8) {
+            promptEl.textContent = '⚠️ Screen video / moving photo detected';
+            promptEl.style.color = '#f87171';
+            subtextEl.textContent = '2D screen video playback detected. Please use live camera.';
             matchCount = 0;
           } else if (dist < FACE_MATCH_THRESHOLD) {
             matchCount++;
