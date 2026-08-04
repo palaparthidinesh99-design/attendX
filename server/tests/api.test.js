@@ -5,7 +5,23 @@ const request = require('supertest');
 const mongoose = require('mongoose');
 const app = require('../server');
 
-const MONGO_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/attendance_system_test';
+// Ensure test suite ALWAYS uses dedicated isolated test DB, NEVER the primary production/dev DB
+function getIsolatedTestMongoUri() {
+  const mainUri = process.env.MONGODB_TEST_URI || process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/attendance_system_test';
+  
+  if (mainUri.includes('mongodb+srv://') || mainUri.includes('mongodb://')) {
+    try {
+      const url = new URL(mainUri);
+      url.pathname = '/attendance_system_test';
+      return url.toString();
+    } catch (_) {
+      return mainUri.replace(/\.net\/([^?]*)/, '.net/attendance_system_test');
+    }
+  }
+  return 'mongodb://127.0.0.1:27017/attendance_system_test';
+}
+
+const MONGO_URI = getIsolatedTestMongoUri();
 
 let passed = 0;
 let failed = 0;
@@ -22,14 +38,15 @@ function assert(description, condition) {
 
 async function runApiTests() {
   console.log('\n🚀 Running API Integration Test Suite...\n');
+  console.log(`  📍 Isolated Test Database: ${MONGO_URI.replace(/\/\/[^@]+@/, '//***:***@')}\n`);
 
   try {
     try {
-      await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 3000 });
+      await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 });
     } catch (_) {
-      await mongoose.connect('mongodb://127.0.0.1:27017/attendance_system_test', { serverSelectionTimeoutMS: 3000 });
+      await mongoose.connect('mongodb://127.0.0.1:27017/attendance_system_test', { serverSelectionTimeoutMS: 5000 });
     }
-    // Clear test database collections before test run
+    // Clear ONLY the isolated test database collections before test run
     await mongoose.connection.dropDatabase();
 
     // ── 1. Health Check ──────────────────────────────────────────────────
