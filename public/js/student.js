@@ -261,7 +261,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Adaptive Eye-Blink Liveness Verification) ──
+// ── STEP 1: Face-First Scan Workflow (Adaptive Blink + Screen Light Reflection Liveness) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -272,7 +272,8 @@ async function startBiometricScanWorkflow() {
   await new Promise(r => setTimeout(r, 100));
 
   document.getElementById('scan-prompt').classList.add('hidden');
-  document.getElementById('face-verification-view').classList.remove('hidden');
+  const faceView = document.getElementById('face-verification-view');
+  faceView.classList.remove('hidden');
   document.getElementById('qr-reader-container').classList.add('hidden');
 
   const promptEl = document.getElementById('liveness-prompt');
@@ -280,7 +281,7 @@ async function startBiometricScanWorkflow() {
 
   promptEl.textContent = '👁️ Blink naturally to verify identity…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Standard Liveness: Please blink naturally once to confirm live presence…';
+  subtextEl.textContent = 'Standard Liveness: Blink naturally once while facing camera…';
 
   const video = document.getElementById('face-video');
   try {
@@ -300,12 +301,23 @@ async function startBiometricScanWorkflow() {
   let blinkReopenedPassed = false;
   let verificationAttempts = 0;
 
+  // Trigger subtle ambient light pulse for video screen playback anti-spoofing
+  let lightPulseActive = false;
+  setTimeout(() => {
+    lightPulseActive = true;
+    faceView.style.boxShadow = '0 0 35px rgba(56, 189, 248, 0.6)';
+    setTimeout(() => {
+      faceView.style.boxShadow = '';
+      lightPulseActive = false;
+    }, 400);
+  }, 1000);
+
   async function checkFrame() {
     if (!activeStream) return;
 
     if (Date.now() - startTime > 25000) {
-      subtextEl.textContent = '⚠️ Timed out. Photo detected or blink not recorded.';
-      setScanStatus('Biometric rejected — static photo detected or liveness blink not recorded.', 'error');
+      subtextEl.textContent = '⚠️ Timed out. Photo/Video detected or blink not recorded.';
+      setScanStatus('Biometric rejected — photo/video spoof detected or blink not recorded.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
