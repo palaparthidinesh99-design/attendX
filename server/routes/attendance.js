@@ -52,19 +52,22 @@ router.post('/scan', authenticate, requireRole('student'), async (req, res, next
     }
 
     // --- CHECK 3: Geofence Verification ---
-    // If accuracyMeters is provided, give tolerance buffer so Wi-Fi / cellular location works smoothly
+    // Laptop Wi-Fi / IP positioning can differ from mobile phone GPS by 150-250m.
+    // We calculate Haversine distance and provide a tolerance buffer for device variance.
     const distanceMeters = haversineMeters(
       studentLat, studentLng,
       session.location.lat, session.location.lng
     );
 
-    const allowedRadius = session.radiusMeters + (accuracyMeters != null ? Math.min(parseFloat(accuracyMeters), 150) : 25);
+    const deviceAccuracy = (accuracyMeters != null && !isNaN(parseFloat(accuracyMeters))) ? parseFloat(accuracyMeters) : 50;
+    const accuracyBuffer = Math.max(deviceAccuracy, 200); // 200m minimum buffer to handle Wi-Fi vs GPS accuracy gaps
+    const allowedRadius = session.radiusMeters + accuracyBuffer;
 
     if (distanceMeters > allowedRadius) {
       return res.status(403).json({
-        error: 'You are outside the allowed radius',
+        error: `Outside allowed geofence (${Math.round(distanceMeters)}m away; max allowed is ${Math.round(allowedRadius)}m incl. ${Math.round(accuracyBuffer)}m location buffer)`,
         distanceMeters: Math.round(distanceMeters),
-        allowedRadius: session.radiusMeters
+        allowedRadius: Math.round(allowedRadius)
       });
     }
 

@@ -283,17 +283,17 @@ function useCurrentLocation() {
           if (ok) {
             btn.disabled = false;
             btn.textContent = '✓ Location set (IP)';
-            setStatus('create-status', '📍 Set location via Wi-Fi/IP triangulation. Expand geofence radius if testing on laptops.', 'info');
+            setStatus('create-status', '📍 Location set via Wi-Fi/IP. System includes a 200m buffer for laptop vs mobile GPS variance.', 'info');
           } else {
             setStatus('create-status', 'Location permission denied. Click "Fill Demo Coords" to test.', 'warning');
             btn.disabled = false;
             btn.textContent = '📍 Get Location';
           }
         },
-        { enableHighAccuracy: false, timeout: 5000, maximumAge: 60000 }
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 0 }
       );
     },
-    { enableHighAccuracy: true, timeout: 4000, maximumAge: 0 }
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
   );
 }
 
@@ -302,7 +302,8 @@ function setLocationSuccess(pos, btn, latInput, lngInput) {
   lngInput.value = pos.coords.longitude.toFixed(6);
   btn.disabled = false;
   btn.textContent = '✓ Location set!';
-  setStatus('create-status', `📍 Coords set (${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)})`, 'success');
+  const accStr = pos.coords.accuracy ? ` (±${Math.round(pos.coords.accuracy)}m accuracy)` : '';
+  setStatus('create-status', `📍 Location set (${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)})${accStr}. 200m buffer active for laptop/phone variance.`, 'success');
   setTimeout(() => { btn.textContent = '📍 Get Location'; }, 3000);
 }
 
