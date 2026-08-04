@@ -286,7 +286,43 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Sequential Dynamic Motion Challenge) ──
+// ── WebAuthn Hardware Biometrics (Fingerprint / Touch ID / Face ID) ──────
+async function startWebAuthnBiometricScan() {
+  if (!window.PublicKeyCredential) {
+    alert('Hardware fingerprint / Touch ID is not supported on this browser. Use camera face verification.');
+    return;
+  }
+
+  setScanStatus('🖐️ Touch Fingerprint / Touch ID sensor on your device…', 'info');
+
+  try {
+    const challenge = new Uint8Array(32);
+    window.crypto.getRandomValues(challenge);
+
+    // Request native OS hardware biometric verification (Touch ID, Fingerprint, Face ID, Windows Hello)
+    const credential = await navigator.credentials.get({
+      publicKey: {
+        challenge,
+        timeout: 60000,
+        userVerification: 'required'
+      }
+    });
+
+    if (credential) {
+      setScanStatus('✓ Hardware Biometric Verified! Opening QR scanner…', 'info');
+      setTimeout(async () => {
+        await openQRScannerCamera();
+      }, 400);
+    }
+  } catch (err) {
+    if (err.name !== 'NotAllowedError') {
+      console.warn('WebAuthn error:', err);
+    }
+    setScanStatus('Fingerprint verification cancelled. Tap button to retry or use Face Scan.', 'warning');
+  }
+}
+
+// ── STEP 1: Face-First Scan Workflow (Biometric Face Verification) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -303,18 +339,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  // Select 1 of 4 randomized challenges (RIGHT, LEFT, UP, DOWN)
-  const challenges = [
-    { code: 'RIGHT', label: '➡️ Turn head to your RIGHT' },
-    { code: 'LEFT',  label: '⬅️ Turn head to your LEFT' },
-    { code: 'UP',    label: '⬆️ Tilt head slightly UP' },
-    { code: 'DOWN',  label: '⬇️ Tilt head slightly DOWN' }
-  ];
-  const challenge = challenges[Math.floor(Math.random() * challenges.length)];
-
-  promptEl.textContent = '👤 Look straight into camera…';
+  promptEl.textContent = '👤 Look at camera for facial verification…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Step A: Position face in neutral center position…';
+  subtextEl.textContent = 'Matching live face against registered profile…';
 
   const video = document.getElementById('face-video');
   try {
@@ -328,15 +355,12 @@ async function startBiometricScanWorkflow() {
   }
 
   let startTime = Date.now();
-  let centerLocked = false;
-  let centerFrames = 0;
-  let challengeStartTime = 0;
   let verificationAttempts = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 30000) {
+    if (Date.now() - startTime > 25000) {
       subtextEl.textContent = '⚠️ Timed out. Click Try Again.';
       setScanStatus('Biometric verification timed out.', 'error');
       cleanupVerificationView();
@@ -350,74 +374,34 @@ async function startBiometricScanWorkflow() {
         const details = await extractFaceDetails(video);
 
         if (!details) {
-          promptEl.textContent = '👤 Position your face in camera…';
+          promptEl.textContent = '👤 Position your face in camera frame…';
           promptEl.style.color = '#fbbf24';
         } else {
-          const { descriptor, yawRatio, pitchRatio } = details;
+          const { descriptor } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          const isNeutralCenter = (yawRatio >= 0.44 && yawRatio <= 0.56) && (pitchRatio >= 0.32 && pitchRatio <= 0.48);
-
-          // PHASE A: Require starting in Neutral Center
-          if (!centerLocked) {
-            if (dist < FACE_MATCH_THRESHOLD && isNeutralCenter) {
-              centerFrames++;
-              if (centerFrames >= 2) {
-                centerLocked = true;
-                challengeStartTime = Date.now();
-                promptEl.textContent = challenge.label;
-                promptEl.style.color = '#fbbf24';
-                subtextEl.textContent = `Live Challenge: Perform ${challenge.label} now!`;
-              }
-            } else {
-              centerFrames = 0;
-              if (dist >= FACE_MATCH_THRESHOLD) {
-                verificationAttempts++;
-                if (verificationAttempts >= 6) {
-                  promptEl.textContent = '❌ Face Not Recognised!';
-                  promptEl.style.color = '#f87171';
-                  subtextEl.textContent = 'Face does not match registered profile.';
-                  setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
-                  cleanupVerificationView();
-                  document.getElementById('scan-prompt').classList.remove('hidden');
-                  isProcessing = false;
-                  return;
-                }
-              }
-              promptEl.textContent = '👤 Look straight into camera…';
-              promptEl.style.color = '#fbbf24';
-              subtextEl.textContent = 'Align face squarely to initialize anti-spoofing challenge…';
-            }
-          } 
-          // PHASE B: Verify Dynamic Motion Challenge within 5s window
-          else {
-            if (Date.now() - challengeStartTime > 5000) {
-              // Challenge window expired — reset center lock to prevent pre-recorded video alignment
-              centerLocked = false;
-              centerFrames = 0;
-              promptEl.textContent = '👤 Look straight into camera…';
-              subtextEl.textContent = 'Motion challenge window expired. Re-aligning center…';
-              await new Promise(r => setTimeout(r, 400));
-              return;
-            }
-
-            let motionPassed = false;
-            if (challenge.code === 'RIGHT' && yawRatio > 0.57) motionPassed = true;
-            if (challenge.code === 'LEFT'  && yawRatio < 0.43) motionPassed = true;
-            if (challenge.code === 'UP'    && pitchRatio < 0.29) motionPassed = true;
-            if (challenge.code === 'DOWN'  && pitchRatio > 0.51) motionPassed = true;
-
-            if (motionPassed && dist < FACE_MATCH_THRESHOLD) {
-              promptEl.textContent = '✓ Live Motion & Face Verified!';
-              promptEl.style.color = '#4ade80';
-              subtextEl.textContent = '3D Head Motion & Face Verified. Opening QR scanner…';
-              setTimeout(async () => {
-                cleanupVerificationView();
-                await openQRScannerCamera();
-              }, 500);
+          if (dist < FACE_MATCH_THRESHOLD) {
+            promptEl.textContent = '✓ Face Verified!';
+            promptEl.style.color = '#4ade80';
+            subtextEl.textContent = 'Identity verified. Opening QR scanner…';
+            setTimeout(async () => {
+              cleanupVerificationView();
+              await openQRScannerCamera();
+            }, 400);
+            return;
+          } else {
+            verificationAttempts++;
+            if (verificationAttempts >= 8) {
+              promptEl.textContent = '❌ Face Not Recognised!';
+              promptEl.style.color = '#f87171';
+              subtextEl.textContent = 'Face does not match registered profile.';
+              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+              cleanupVerificationView();
+              document.getElementById('scan-prompt').classList.remove('hidden');
+              isProcessing = false;
               return;
             } else {
-              promptEl.textContent = challenge.label;
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/8) — face camera…`;
               promptEl.style.color = '#fbbf24';
             }
           }
@@ -848,6 +832,7 @@ window.openFaceEnrollmentModal = openFaceEnrollmentModal;
 window.closeFaceEnrollmentModal = closeFaceEnrollmentModal;
 window.captureAndSaveFaceProfile = captureAndSaveFaceProfile;
 window.startBiometricScanWorkflow = startBiometricScanWorkflow;
+window.startWebAuthnBiometricScan = startWebAuthnBiometricScan;
 window.flipFaceCamera = flipFaceCamera;
 window.flipQRCamera = flipQRCamera;
 window.flipEnrollCamera = flipEnrollCamera;
@@ -866,6 +851,7 @@ function bindStudentEventListeners() {
   document.getElementById('btn-close-enroll-face-modal')?.addEventListener('click', closeFaceEnrollmentModal);
   document.getElementById('btn-cancel-enroll-face-modal')?.addEventListener('click', closeFaceEnrollmentModal);
   document.getElementById('capture-face-btn')?.addEventListener('click', captureAndSaveFaceProfile);
+  document.getElementById('btn-start-fingerprint-scan')?.addEventListener('click', startWebAuthnBiometricScan);
   document.getElementById('btn-start-biometric-scan')?.addEventListener('click', startBiometricScanWorkflow);
   document.getElementById('btn-flip-face-camera')?.addEventListener('click', flipFaceCamera);
   document.getElementById('btn-flip-qr-camera')?.addEventListener('click', flipQRCamera);

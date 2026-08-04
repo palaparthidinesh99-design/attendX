@@ -134,10 +134,15 @@
             <div class="scanner-section">
               <div id="scan-prompt" style="text-align:center;">
                 <h2>Mark Attendance</h2>
-                <p style="font-size:0.82rem;margin-top:0.2rem;">Verify AI biometric identity, then scan class QR code</p>
-                <button type="button" class="btn btn-primary btn-lg mt-2" id="btn-start-biometric-scan">
-                  📷 Verify Face &amp; Scan QR
-                </button>
+                <p style="font-size:0.82rem;margin-top:0.2rem;">Verify identity via device Fingerprint / Touch ID or AI Face</p>
+                <div style="display:flex;flex-direction:column;gap:0.6rem;margin-top:0.8rem;">
+                  <button type="button" class="btn btn-primary btn-lg" id="btn-start-fingerprint-scan">
+                    🖐️ Verify Fingerprint / Touch ID &amp; Scan
+                  </button>
+                  <button type="button" class="btn btn-ghost btn-md" id="btn-start-biometric-scan">
+                    📷 Verify Face &amp; Scan QR
+                  </button>
+                </div>
               </div>
 
               <!-- Face Liveness Camera View (Step 1) -->
