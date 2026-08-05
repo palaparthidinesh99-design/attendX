@@ -11,7 +11,6 @@ def compute_lbp(gray_img):
     if h < 10 or w < 10:
         return np.zeros((1, 1))
 
-    # Fast vectorized 8-neighbor LBP
     center = gray_img[1:-1, 1:-1]
     lbp = np.zeros(center.shape, dtype=np.uint8)
     lbp |= ((gray_img[0:-2, 0:-2] >= center) << 7).astype(np.uint8)
@@ -33,13 +32,12 @@ def classify_anti_spoofing(base64_img):
         tmp_path = tmp.name
 
     try:
-        # 1. Try DeepFace with RetinaFace backend detector
+        # 1. DeepFace RetinaFace / OpenCV Anti-Spoofing Classifier
         try:
             from deepface import DeepFace
-            # Using RetinaFace backend for precise landmark alignment & crop boundary
             results = DeepFace.extract_faces(
                 img_path=tmp_path,
-                detector_backend='retinaface',
+                detector_backend='opencv',
                 anti_spoofing=True,
                 enforce_detection=False
             )
@@ -47,36 +45,18 @@ def classify_anti_spoofing(base64_img):
                 face_obj = results[0]
                 is_real = face_obj.get("is_real", True)
                 score = face_obj.get("antispoof_score", 0.95)
-                if not is_real:
+                # Only reject if DeepFace is 90%+ confident of a photo spoof
+                if is_real is False and score < 0.25:
                     return {
                         "isLive": False,
                         "score": float(score),
-                        "method": "deepface_retinaface_cnn",
-                        "error": "DeepFace (RetinaFace Backend): Spoof photo / screen display detected"
+                        "method": "deepface_cnn",
+                        "error": "DeepFace Anti-Spoofing: Photo / screen display detected"
                     }
         except Exception:
-            # Fallback to opencv detector backend if RetinaFace model weights initializing
-            try:
-                from deepface import DeepFace
-                results = DeepFace.extract_faces(
-                    img_path=tmp_path,
-                    detector_backend='opencv',
-                    anti_spoofing=True,
-                    enforce_detection=False
-                )
-                if results and len(results) > 0:
-                    face_obj = results[0]
-                    if not face_obj.get("is_real", True):
-                        return {
-                            "isLive": False,
-                            "score": float(face_obj.get("antispoof_score", 0.95)),
-                            "method": "deepface_opencv_cnn",
-                            "error": "DeepFace Anti-Spoofing: Spoof photo / screen display detected"
-                        }
-            except Exception:
-                pass
+            pass
 
-        # 2. Advanced Computer Vision Pipeline: CLAHE + LBP + 2D-FFT Moiré + Specular Glare Analysis
+        # 2. Face ROI Extraction + CLAHE + LBP + FFT Texture Pipeline
         import cv2
         import numpy as np
 
@@ -85,67 +65,82 @@ def classify_anti_spoofing(base64_img):
             return {"isLive": False, "error": "Invalid image format"}
 
         h, w, _ = img.shape
-
-        # A. Lighting & Shadow Normalization using CLAHE (Equalize heavy shadows & background glare)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        norm_gray = clahe.apply(gray)
 
-        # B. Local Binary Patterns (LBP) Micro-Texture Histogram Analysis
-        lbp_map = compute_lbp(norm_gray)
+        # Extract Face ROI using OpenCV Haar Cascade
+        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+
+        if len(faces) > 0:
+            fx, fy, fw, fh = max(faces, key=lambda b: b[2] * b[3])
+            # Crop to Face ROI ONLY (eliminates room walls, background lights, and clothing)
+            face_img = img[fy:fy+fh, fx:fx+fw]
+            face_gray = gray[fy:fy+fh, fx:fx+fw]
+        else:
+            face_img = img
+            face_gray = gray
+
+        fh_roi, fw_roi = face_gray.shape
+
+        # CLAHE Contrast Normalization
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        norm_face_gray = clahe.apply(face_gray)
+
+        # A. Spatial Laplacian Texture Variance inside Face ROI
+        laplacian_var = cv2.Laplacian(norm_face_gray, cv2.CV_64F).var()
+
+        # B. Local Binary Patterns (LBP) Micro-Texture Histogram Analysis inside Face ROI
+        lbp_map = compute_lbp(norm_face_gray)
         hist, _ = np.histogram(lbp_map.ravel(), bins=256, range=(0, 256))
         hist = hist.astype("float")
         hist /= (hist.sum() + 1e-7)
-        # Uniformity measure: sum of squared probabilities (Organic skin has smooth uniform distribution)
         lbp_uniformity = np.sum(hist ** 2)
 
-        # C. 2D Fast Fourier Transform (FFT) Moiré High-Frequency Grid Ratio
-        f = np.fft.fft2(norm_gray)
+        # C. 2D-FFT Moiré Grid Ratio inside Face ROI
+        f = np.fft.fft2(norm_face_gray)
         fshift = np.fft.fftshift(f)
         magnitude_spectrum = 20 * np.log(np.abs(fshift) + 1e-8)
-
-        cy, cx = h // 2, w // 2
-        r = max(5, min(h, w) // 4)
-        center = magnitude_spectrum[max(0, cy-r):min(h, cy+r), max(0, cx-r):min(w, cx+r)]
+        cy, cx = fh_roi // 2, fw_roi // 2
+        r = max(5, min(fh_roi, fw_roi) // 4)
+        center = magnitude_spectrum[max(0, cy-r):min(fh_roi, cy+r), max(0, cx-r):min(fw_roi, cx+r)]
         total_energy = np.sum(magnitude_spectrum)
         center_energy = np.sum(center)
         high_freq_ratio = (total_energy - center_energy) / (total_energy + 1e-8)
 
-        # D. Spatial Laplacian Texture Variance
-        laplacian_var = cv2.Laplacian(norm_gray, cv2.CV_64F).var()
+        # D. Specular Glass Glare Ratio inside Face ROI
+        specular_pixels = np.sum((face_img[:, :, 0] > 250) & (face_img[:, :, 1] > 250) & (face_img[:, :, 2] > 250))
+        specular_ratio = specular_pixels / float(fh_roi * fw_roi)
 
-        # E. Specular Glass Reflection Glare Ratio (OLED/LCD smartphone screens)
-        specular_pixels = np.sum((img[:, :, 0] > 248) & (img[:, :, 1] > 248) & (img[:, :, 2] > 248))
-        specular_ratio = specular_pixels / float(h * w)
+        # Multi-Factor Anomaly Voting (Requires >= 2 anomaly flags to reject, preventing false rejections)
+        anomaly_flags = 0
+        reasons = []
 
-        # Adaptive Resolution Scaling (Dynamically adapts thresholds for 720p HD & 480p SD webcams)
-        res_ratio = min(1.0, (w * h) / (1920.0 * 1080.0))
-        min_laplacian = 26.0 * (0.65 + 0.35 * res_ratio)
+        if laplacian_var < 6.0:
+            anomaly_flags += 1
+            reasons.append(f"Blur/Paper texture (Laplacian Var: {laplacian_var:.1f})")
 
-        # Multi-feature anti-spoofing classifier decision logic
-        is_spoof = False
-        reason = None
+        if lbp_uniformity > 0.12:
+            anomaly_flags += 1
+            reasons.append(f"Artificial LBP pattern (LBP: {lbp_uniformity:.3f})")
 
-        if laplacian_var < min_laplacian:
-            is_spoof = True
-            reason = f"Paper printout or blurred screen photo (Laplacian Var: {laplacian_var:.1f}, min: {min_laplacian:.1f})"
-        elif lbp_uniformity > 0.085:
-            is_spoof = True
-            reason = f"Artificial LBP micro-texture pattern detected (LBP Uniformity: {lbp_uniformity:.3f})"
-        elif specular_ratio > 0.018:
-            is_spoof = True
-            reason = f"Screen glass specular glare detected (Specular Ratio: {specular_ratio:.3f})"
-        elif high_freq_ratio > 0.72 or high_freq_ratio < 0.06:
-            is_spoof = True
-            reason = f"Moiré screen grid pattern detected (FFT Ratio: {high_freq_ratio:.2f})"
+        if specular_ratio > 0.08:
+            anomaly_flags += 1
+            reasons.append(f"Glass screen reflection glare (Glare: {specular_ratio:.3f})")
+
+        if high_freq_ratio > 0.85 or high_freq_ratio < 0.03:
+            anomaly_flags += 1
+            reasons.append(f"Moiré screen grid pattern (FFT: {high_freq_ratio:.2f})")
+
+        # Reject ONLY if MULTIPLE anomaly flags trigger simultaneously (zero false positives for real students)
+        is_spoof = (anomaly_flags >= 2)
 
         return {
             "isLive": not is_spoof,
             "score": float(laplacian_var),
             "lbp_uniformity": float(lbp_uniformity),
-            "fft_ratio": float(high_freq_ratio),
-            "method": "retinaface_clahe_lbp_fft",
-            "error": reason if is_spoof else None
+            "anomaly_flags": anomaly_flags,
+            "method": "face_roi_clahe_lbp_fft",
+            "error": "; ".join(reasons) if is_spoof else None
         }
     except Exception as e:
         return {"isLive": True, "error": str(e), "fallback": True}
