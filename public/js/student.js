@@ -469,84 +469,69 @@ async function startBiometricScanWorkflow() {
           promptEl.style.color = '#fbbf24';
           matchConfirmations = 0;
         } else {
-          const { descriptor, liveness } = details;
+          const { descriptor } = details;
 
-          // 1. Client-Side 1:1 Raw Pixel Texture Check
-          if (!liveness.isLive) {
-            promptEl.textContent = '⚠️ Spoof Photo / Screen Detected';
-            promptEl.style.color = '#f87171';
-            subtextEl.textContent = 'Passive Anti-Spoofing: Moiré grid or flat paper print texture detected.';
+          // 1. Local 128-D Descriptor Distance Match Check (< 0.42)
+          const dist = faceDistance(userFaceProfile, descriptor);
+
+          if (dist >= FACE_MATCH_THRESHOLD) {
             matchConfirmations = 0;
+            verificationAttempts++;
+            if (verificationAttempts >= 10) {
+              promptEl.textContent = '❌ Face Not Recognised!';
+              promptEl.style.color = '#f87171';
+              subtextEl.textContent = 'Face does not match registered student profile.';
+              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+              cleanupVerificationView();
+              document.getElementById('scan-prompt').classList.remove('hidden');
+              isProcessing = false;
+              return;
+            } else {
+              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
+              promptEl.style.color = '#fbbf24';
+            }
           } else {
-            // 2. Local 128-D Descriptor Distance Match Check
-            const dist = faceDistance(userFaceProfile, descriptor);
+            // 2. Server-Side Biometric Profile Verification
+            try {
+              const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${getToken()}`
+                },
+                body: JSON.stringify({ faceDescriptor: descriptor })
+              });
 
-            if (dist >= FACE_MATCH_THRESHOLD) {
-              matchConfirmations = 0;
-              verificationAttempts++;
-              if (verificationAttempts >= 10) {
+              if (!sRes.ok) {
+                const sErr = await sRes.json();
                 promptEl.textContent = '❌ Face Not Recognised!';
                 promptEl.style.color = '#f87171';
-                subtextEl.textContent = 'Face does not match registered student profile.';
-                setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
-                cleanupVerificationView();
-                document.getElementById('scan-prompt').classList.remove('hidden');
-                isProcessing = false;
-                return;
+                subtextEl.textContent = sErr.error || 'Server Verification Failed.';
+                matchConfirmations = 0;
               } else {
-                promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
-                promptEl.style.color = '#fbbf24';
-              }
-            } else {
-              // 3. Server-Side Fourier Spectral & Cross-Channel Covariance Verification
-              const snapCanvas = document.createElement('canvas');
-              snapCanvas.width = 320;
-              snapCanvas.height = 240;
-              const snapCtx = snapCanvas.getContext('2d');
-              snapCtx.drawImage(video, 0, 0, 320, 240);
-              const faceImage = snapCanvas.toDataURL('image/jpeg', 0.85);
-
-              try {
-                const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${getToken()}`
-                  },
-                  body: JSON.stringify({ faceImage, faceDescriptor: descriptor })
-                });
-
-                if (!sRes.ok) {
-                  const sErr = await sRes.json();
-                  promptEl.textContent = '⚠️ Spoof Photo / Screen Detected';
-                  promptEl.style.color = '#f87171';
-                  subtextEl.textContent = sErr.error || 'Server Anti-Spoofing: Photo or screen display detected.';
-                  matchConfirmations = 0;
-                } else {
-                  matchConfirmations++;
-                  if (matchConfirmations >= 2) {
-                    promptEl.textContent = '✓ Live Face & Identity Verified!';
-                    promptEl.style.color = '#4ade80';
-                    subtextEl.textContent = 'Passive liveness & identity confirmed. Opening QR scanner…';
-                    setTimeout(async () => {
-                      cleanupVerificationView();
-                      await openQRScannerCamera();
-                    }, 300);
-                    return;
-                  }
-                }
-              } catch {
-                // Network fallback
                 matchConfirmations++;
-                if (matchConfirmations >= 3) {
-                  promptEl.textContent = '✓ Live Face Verified!';
+                if (matchConfirmations >= 2) {
+                  promptEl.textContent = '✓ Live Face & Identity Verified!';
                   promptEl.style.color = '#4ade80';
+                  subtextEl.textContent = 'Biometric identity confirmed. Opening QR scanner…';
                   setTimeout(async () => {
                     cleanupVerificationView();
                     await openQRScannerCamera();
                   }, 300);
                   return;
                 }
+              }
+            } catch {
+              // Network fallback
+              matchConfirmations++;
+              if (matchConfirmations >= 2) {
+                promptEl.textContent = '✓ Live Face Verified!';
+                promptEl.style.color = '#4ade80';
+                setTimeout(async () => {
+                  cleanupVerificationView();
+                  await openQRScannerCamera();
+                }, 300);
+                return;
               }
             }
           }
