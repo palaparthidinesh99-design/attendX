@@ -332,7 +332,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Randomized 2-Action Sequence Pipeline) ──
+// ── STEP 1: Face-First Scan Workflow (Relative Motion Transition & 2s Time Window Engine) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -350,7 +350,7 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  // Available action pool for 2-step random sequence
+  // Action pool
   const pool = [
     { code: 'RIGHT', label: '➡️ Turn head RIGHT' },
     { code: 'LEFT',  label: '⬅️ Turn head LEFT' },
@@ -359,13 +359,13 @@ async function startBiometricScanWorkflow() {
   ];
 
   // Pick 2 distinct random actions fresh at runtime
-  const shuffled = [...pool].sort(() => Math.random() - 0.5);
-  const action1 = shuffled[0];
-  const action2 = shuffled[1];
+  let currentPool = [...pool].sort(() => Math.random() - 0.5);
+  let activeAction = currentPool[0];
+  let secondAction = currentPool[1];
 
-  promptEl.textContent = `1/2: ${action1.label}`;
+  promptEl.textContent = `1/2: ${activeAction.label}`;
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = `Step 1 of 2: Perform ${action1.label}…`;
+  subtextEl.textContent = `Step 1 of 2: Perform ${activeAction.label} within 2 seconds…`;
 
   const video = document.getElementById('face-video');
   try {
@@ -378,18 +378,31 @@ async function startBiometricScanWorkflow() {
     return;
   }
 
-  let startTime = Date.now();
   let step = 1; // Step 1 -> Step 2 -> Complete
+  let retryCount = 0; // Max 1 retry allowed
+  let stepStartTime = Date.now();
+  let neutralConfirmed = false;
   let blinkClosed = false;
   let verificationAttempts = 0;
 
-  function evaluateAction(actionCode, details) {
+  function evaluateMotionTransition(actionCode, details) {
     const { yawRatio, avgEAR, mar } = details;
-    if (actionCode === 'RIGHT') return yawRatio > 0.54;
-    if (actionCode === 'LEFT')  return yawRatio < 0.46;
-    if (actionCode === 'SMILE') return mar > 0.22;
+
+    if (actionCode === 'RIGHT') {
+      if (yawRatio >= 0.47 && yawRatio <= 0.53) neutralConfirmed = true;
+      return neutralConfirmed && yawRatio >= 0.56;
+    }
+    if (actionCode === 'LEFT') {
+      if (yawRatio >= 0.47 && yawRatio <= 0.53) neutralConfirmed = true;
+      return neutralConfirmed && yawRatio <= 0.44;
+    }
+    if (actionCode === 'SMILE') {
+      if (mar < 0.18) neutralConfirmed = true;
+      return neutralConfirmed && mar >= 0.26;
+    }
     if (actionCode === 'BLINK') {
-      if (avgEAR < 0.24) blinkClosed = true;
+      if (avgEAR > 0.25) neutralConfirmed = true;
+      if (neutralConfirmed && avgEAR < 0.21) blinkClosed = true;
       return blinkClosed && avgEAR >= 0.25;
     }
     return false;
@@ -398,13 +411,34 @@ async function startBiometricScanWorkflow() {
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 22000) {
-      subtextEl.textContent = '⚠️ Timed out. Photo/Video detected or sequence incomplete.';
-      setScanStatus('Biometric rejected — static photo/video detected or 2-step sequence failed.', 'error');
-      cleanupVerificationView();
-      document.getElementById('scan-prompt').classList.remove('hidden');
-      isProcessing = false;
-      return;
+    const now = Date.now();
+    const elapsedStepTime = now - stepStartTime;
+
+    // 2-Second Time Window per Step Expiration Check
+    if (elapsedStepTime > 2200) {
+      if (retryCount === 0) {
+        // Grant 1 Retry Step with a fresh action
+        retryCount++;
+        stepStartTime = now;
+        neutralConfirmed = false;
+        blinkClosed = false;
+        
+        // Pick replacement action
+        const remainingPool = pool.filter(a => a.code !== activeAction.code);
+        activeAction = remainingPool[Math.floor(Math.random() * remainingPool.length)];
+
+        promptEl.textContent = `Retry: ${activeAction.label}`;
+        promptEl.style.color = '#fbbf24';
+        subtextEl.textContent = `Time expired! Retry step: Perform ${activeAction.label} (2s window)…`;
+      } else {
+        // Failed after retry -> Reject static photo / video
+        subtextEl.textContent = '⚠️ Step timed out. Static photo detected or motion missing.';
+        setScanStatus('Biometric rejected — static photo detected or motion transition missing.', 'error');
+        cleanupVerificationView();
+        document.getElementById('scan-prompt').classList.remove('hidden');
+        isProcessing = false;
+        return;
+      }
     }
 
     if (video.videoWidth > 0) {
@@ -420,7 +454,7 @@ async function startBiometricScanWorkflow() {
 
           if (dist >= FACE_MATCH_THRESHOLD && dist >= 0.48) {
             verificationAttempts++;
-            if (verificationAttempts >= 12) {
+            if (verificationAttempts >= 10) {
               promptEl.textContent = '❌ Face Not Recognised!';
               promptEl.style.color = '#f87171';
               subtextEl.textContent = 'Face does not match registered student profile.';
@@ -431,32 +465,38 @@ async function startBiometricScanWorkflow() {
               return;
             }
           } else {
-            // Evaluate Step 1 vs Step 2
-            if (step === 1) {
-              if (evaluateAction(action1.code, details)) {
+            // Evaluate Relative Motion Transition
+            if (evaluateMotionTransition(activeAction.code, details)) {
+              if (step === 1) {
+                // Transition to Step 2
                 step = 2;
-                blinkClosed = false; // reset blink state for step 2
-                promptEl.textContent = `2/2: ${action2.label}`;
+                stepStartTime = now; // reset 2s window for step 2
+                neutralConfirmed = false;
+                blinkClosed = false;
+                activeAction = secondAction;
+
+                promptEl.textContent = `2/2: ${activeAction.label}`;
                 promptEl.style.color = '#fbbf24';
-                subtextEl.textContent = `Step 2 of 2: Now perform ${action2.label}…`;
-              } else {
-                promptEl.textContent = `1/2: ${action1.label}`;
-                promptEl.style.color = '#fbbf24';
-              }
-            } else if (step === 2) {
-              if (evaluateAction(action2.code, details)) {
-                promptEl.textContent = '✓ 2-Step Live Face Verified!';
+                subtextEl.textContent = `Step 2 of 2: Perform ${activeAction.label} within 2s…`;
+              } else if (step === 2) {
+                // Verified successfully!
+                promptEl.textContent = '✓ Live Motion & Face Verified!';
                 promptEl.style.color = '#4ade80';
-                subtextEl.textContent = 'Randomized liveness sequence & identity confirmed. Opening QR scanner…';
+                subtextEl.textContent = '2-step motion transition & identity confirmed. Opening QR scanner…';
                 setTimeout(async () => {
                   cleanupVerificationView();
                   await openQRScannerCamera();
                 }, 300);
                 return;
-              } else {
-                promptEl.textContent = `2/2: ${action2.label}`;
-                promptEl.style.color = '#fbbf24';
               }
+            } else {
+              const remainingSecs = Math.max(0, Math.ceil((2200 - elapsedStepTime) / 1000));
+              if (step === 1) {
+                promptEl.textContent = `1/2 (${remainingSecs}s): ${activeAction.label}`;
+              } else {
+                promptEl.textContent = `2/2 (${remainingSecs}s): ${activeAction.label}`;
+              }
+              promptEl.style.color = '#fbbf24';
             }
           }
         }
@@ -465,7 +505,7 @@ async function startBiometricScanWorkflow() {
       }
     }
 
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise(r => setTimeout(r, 120));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
