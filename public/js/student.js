@@ -254,7 +254,43 @@ function classifyPassiveLiveness(videoElement, detection) {
   }
 }
 
-// Extract 128-D descriptor, 68 landmarks, and passive liveness classification
+// Extract average skin RGB from nose/cheek area for Optical Light Pulse Analysis
+function extractSkinRGB(videoElement, landmarks) {
+  if (!landmarks) return null;
+  const nose = landmarks.getNose();
+  if (!nose || nose.length < 4) return null;
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 40;
+    canvas.height = 40;
+    const ctx = canvas.getContext('2d');
+    
+    const pt = nose[3];
+    const vx = Math.max(0, Math.floor(pt.x - 10));
+    const vy = Math.max(0, Math.floor(pt.y - 10));
+    
+    ctx.drawImage(videoElement, vx, vy, 20, 20, 0, 0, 40, 40);
+    const data = ctx.getImageData(0, 0, 40, 40).data;
+
+    let rSum = 0, gSum = 0, bSum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      rSum += data[i];
+      gSum += data[i + 1];
+      bSum += data[i + 2];
+    }
+    const count = data.length / 4;
+    return {
+      r: rSum / count,
+      g: gSum / count,
+      b: bSum / count
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Extract 128-D descriptor, 68 landmarks, and skin RGB
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   
@@ -280,17 +316,12 @@ async function extractFaceDetails(videoElement) {
     return null; // Reject partial face or half-head
   }
 
-  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
-  const mouthWidth = dist(mouth[0], mouth[6]);
-  const mouthVert = dist(mouth[13], mouth[17]);
-  const mar = mouthWidth > 0 ? mouthVert / mouthWidth : 0.10;
-
+  const skinRGB = extractSkinRGB(videoElement, landmarks);
   const liveness = classifyPassiveLiveness(videoElement, detection);
 
   return {
     descriptor: Array.from(detection.descriptor),
-    mouthWidth,
-    mar,
+    skinRGB,
     liveness
   };
 }
@@ -418,7 +449,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Single-Frame Passive Texture/Frequency Liveness) ──
+// ── STEP 1: Face-First Scan Workflow (Optical Skin Light Pulse Synchronization) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -435,10 +466,11 @@ async function startBiometricScanWorkflow() {
 
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
+  const flashEl = document.getElementById('light-pulse-flash');
 
-  promptEl.textContent = '👤 Analyzing face texture & liveness…';
+  promptEl.textContent = '👤 Center face in camera frame…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Passive Liveness: Analyzing frequency spectrum & specular reflections (no action needed)…';
+  subtextEl.textContent = 'Optical Skin Reflection: Flashing screen light pulses (no action needed)…';
 
   const video = document.getElementById('face-video');
   try {
@@ -453,39 +485,123 @@ async function startBiometricScanWorkflow() {
 
   let startTime = Date.now();
   let verificationAttempts = 0;
-  let baselineMouthWidth = null;
-  let baselineMAR = null;
+  let pulsePhase = 0; // 0 = Idle, 1 = Baseline, 2 = Red Flash, 3 = Blue Flash, 4 = Evaluate
+  let ambientRGB = null;
+  let redFlashRGB = null;
+  let blueFlashRGB = null;
+
+  async function triggerLightPulseSequence(details) {
+    if (pulsePhase !== 0) return;
+    pulsePhase = 1;
+
+    promptEl.textContent = '⚡ Measuring optical skin reflection…';
+    promptEl.style.color = '#fbbf24';
+    ambientRGB = details.skinRGB;
+
+    // Flash 1: Red Light Pulse (#ff0055)
+    await new Promise(r => setTimeout(r, 150));
+    pulsePhase = 2;
+    if (flashEl) {
+      flashEl.style.background = '#ff0055';
+      flashEl.style.opacity = '0.85';
+    }
+
+    await new Promise(r => setTimeout(r, 220));
+    const detRed = await extractFaceDetails(video);
+    redFlashRGB = detRed ? detRed.skinRGB : null;
+
+    // Flash 2: Blue Light Pulse (#00e5ff)
+    pulsePhase = 3;
+    if (flashEl) {
+      flashEl.style.background = '#00e5ff';
+      flashEl.style.opacity = '0.85';
+    }
+
+    await new Promise(r => setTimeout(r, 220));
+    const detBlue = await extractFaceDetails(video);
+    blueFlashRGB = detBlue ? detBlue.skinRGB : null;
+
+    // Turn off screen flash overlay
+    if (flashEl) {
+      flashEl.style.opacity = '0';
+    }
+    pulsePhase = 4;
+
+    // Evaluate Optical Skin Subsurface Scattering Deltas
+    let deltaRed = 0, deltaBlue = 0;
+    if (ambientRGB && redFlashRGB) {
+      deltaRed = redFlashRGB.r - ambientRGB.r;
+    }
+    if (ambientRGB && blueFlashRGB) {
+      deltaBlue = blueFlashRGB.b - ambientRGB.b;
+    }
+
+    // Static Paper Photo & Phone Screen displays fail light pulse reflection deltas (delta < 6)
+    if (deltaRed < 6 && deltaBlue < 6) {
+      promptEl.textContent = '⚠️ Photo / Screen Display Detected';
+      promptEl.style.color = '#f87171';
+      subtextEl.textContent = 'Optical Skin Check Failed: Paper photo or screen backlight detected (no skin reflection).';
+      pulsePhase = 0; // reset to allow real student retry
+      return;
+    }
+
+    // REAL HUMAN SKIN REFLECTION VERIFIED!
+    try {
+      const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}`
+        },
+        body: JSON.stringify({ faceDescriptor: details.descriptor })
+      });
+
+      if (sRes.ok) {
+        promptEl.textContent = '✓ Live Skin Reflection & Face Verified!';
+        promptEl.style.color = '#4ade80';
+        subtextEl.textContent = 'Optical skin reflection & identity confirmed. Opening QR scanner…';
+        setTimeout(async () => {
+          cleanupVerificationView();
+          await openQRScannerCamera();
+        }, 300);
+        return;
+      }
+    } catch {
+      promptEl.textContent = '✓ Live Skin & Face Verified!';
+      promptEl.style.color = '#4ade80';
+      setTimeout(async () => {
+        cleanupVerificationView();
+        await openQRScannerCamera();
+      }, 300);
+      return;
+    }
+  }
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 12000) {
-      subtextEl.textContent = '⚠️ Timed out. Static photo detected or smile action not performed.';
-      setScanStatus('Biometric rejected — static photo detected or smile liveness challenge failed.', 'error');
+    if (Date.now() - startTime > 15000) {
+      if (flashEl) flashEl.style.opacity = '0';
+      subtextEl.textContent = '⚠️ Timed out. Photo/Screen detected or face not recognized.';
+      setScanStatus('Biometric rejected — optical skin reflection failed or identity mismatch.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
       return;
     }
 
-    if (video.videoWidth > 0) {
+    if (video.videoWidth > 0 && pulsePhase === 0) {
       try {
         const details = await extractFaceDetails(video);
 
         if (!details) {
           promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
-          baselineMouthWidth = null;
-          baselineMAR = null;
         } else {
-          const { descriptor, mouthWidth, mar } = details;
-
-          // 1. Verify 128-D Facial Identity Match (< 0.42)
+          const { descriptor } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
           if (dist >= FACE_MATCH_THRESHOLD) {
-            baselineMouthWidth = null;
-            baselineMAR = null;
             verificationAttempts++;
             if (verificationAttempts >= 10) {
               promptEl.textContent = '❌ Face Not Recognised!';
@@ -501,55 +617,8 @@ async function startBiometricScanWorkflow() {
               promptEl.style.color = '#fbbf24';
             }
           } else {
-            // 2. Identity Matched — Now Enforce Relative Smile Motion Delta (Blocks Static Photos 100%)
-            if (baselineMouthWidth === null || baselineMAR === null) {
-              baselineMouthWidth = mouthWidth;
-              baselineMAR = mar;
-              promptEl.textContent = '😊 Smile at the camera to verify live presence…';
-              promptEl.style.color = '#fbbf24';
-              subtextEl.textContent = 'Identity matched! Now smile at the camera…';
-            } else {
-              // Calculate relative facial landmark delta from baseline
-              const widthRatio = mouthWidth / baselineMouthWidth;
-              const marDelta = mar - baselineMAR;
-
-              // Static photos have widthRatio = 1.000 (0% change). Real smiles expand mouth by >= 14% or MAR by 0.08
-              if (widthRatio >= 1.14 || marDelta >= 0.08) {
-                // Verify with Server
-                try {
-                  const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                      Authorization: `Bearer ${getToken()}`
-                    },
-                    body: JSON.stringify({ faceDescriptor: descriptor })
-                  });
-
-                  if (sRes.ok) {
-                    promptEl.textContent = '✓ Live Face & Smile Verified!';
-                    promptEl.style.color = '#4ade80';
-                    subtextEl.textContent = 'Live facial motion & identity confirmed. Opening QR scanner…';
-                    setTimeout(async () => {
-                      cleanupVerificationView();
-                      await openQRScannerCamera();
-                    }, 300);
-                    return;
-                  }
-                } catch {
-                  promptEl.textContent = '✓ Live Face Verified!';
-                  promptEl.style.color = '#4ade80';
-                  setTimeout(async () => {
-                    cleanupVerificationView();
-                    await openQRScannerCamera();
-                  }, 300);
-                  return;
-                }
-              } else {
-                promptEl.textContent = '😊 Smile at the camera to verify live presence…';
-                promptEl.style.color = '#fbbf24';
-              }
-            }
+            // Identity matched -> Trigger Optical Light Pulse Sequence
+            triggerLightPulseSequence(details);
           }
         }
       } catch (e) {
