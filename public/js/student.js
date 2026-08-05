@@ -206,9 +206,9 @@ async function openQRScannerCamera() {
   await stopCameraStream();
   await new Promise(r => setTimeout(r, 100));
 
-  document.getElementById('scan-prompt').classList.add('hidden');
-  document.getElementById('face-verification-view').classList.add('hidden');
-  document.getElementById('qr-reader-container').classList.remove('hidden');
+  document.getElementById('scan-prompt')?.classList.add('hidden');
+  document.getElementById('face-verification-view')?.classList.add('hidden');
+  document.getElementById('qr-reader-container')?.classList.remove('hidden');
 
   setScanStatus('📷 Point camera at teacher\'s rotating QR code', 'info');
 
@@ -377,10 +377,10 @@ function showSuccessView(data) {
 async function resetScanner() {
   await stopCameraStream();
   document.getElementById('success-view').classList.add('hidden');
-  document.getElementById('scan-prompt').classList.remove('hidden');
-  document.getElementById('qr-reader').classList.add('hidden');
+  document.getElementById('scan-prompt')?.classList.remove('hidden');
+  document.getElementById('qr-reader')?.classList.add('hidden');
   document.getElementById('qr-reader-container')?.classList.add('hidden');
-  document.getElementById('face-verification-view').classList.add('hidden');
+  document.getElementById('face-verification-view')?.classList.add('hidden');
   setScanStatus('', '');
   isProcessing = false;
 }
