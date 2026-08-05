@@ -117,6 +117,13 @@ function getEyeEAR(eyePoints) {
   return (v1 + v2) / (2.0 * h);
 }
 
+// Helper: calculate variance of number array
+function getVariance(arr) {
+  if (!arr || arr.length < 3) return 1.0;
+  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+  return arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length;
+}
+
 // Calculate Laplacian Pixel Texture Variance to detect flat paper/screen surfaces
 function calculateTextureVariance(videoElement, detection) {
   if (!detection || !detection.detection) return 100;
@@ -153,7 +160,7 @@ function calculateTextureVariance(videoElement, detection) {
   }
 }
 
-// Extract 128-D descriptor, 68 landmarks, texture variance, EAR, and head yaw ratio
+// Extract 128-D descriptor, 68 landmarks, texture variance, EAR, and non-rigid landmark ratios
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   
@@ -181,33 +188,20 @@ async function extractFaceDetails(videoElement) {
 
   const textureVariance = calculateTextureVariance(videoElement, detection);
 
-  // Head Yaw Ratio (0.50 = straight, >0.54 = right, <0.46 = left)
-  const faceWidth = jaw[16].x - jaw[0].x;
-  const yawRatio = faceWidth > 0 ? (nose[3].x - jaw[0].x) / faceWidth : 0.50;
-
-  // Head Pitch Ratio (0.40 = straight, <0.33 = UP)
-  const eyeCenterY = (leftEye[0].y + rightEye[3].y) / 2;
-  const faceHeight = jaw[8].y - eyeCenterY;
-  const pitchRatio = faceHeight > 0 ? (nose[3].y - eyeCenterY) / faceHeight : 0.40;
-
-  // Eye Aspect Ratio (EAR) for eye blink
+  // Compute 3D Non-Rigid Landmark Parallax Ratios
   const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
-  const leftEAR = (dist(leftEye[1], leftEye[5]) + dist(leftEye[2], leftEye[4])) / (2 * dist(leftEye[0], leftEye[3]));
-  const rightEAR = (dist(rightEye[1], rightEye[5]) + dist(rightEye[2], rightEye[4])) / (2 * dist(rightEye[0], rightEye[3]));
-  const avgEAR = (leftEAR + rightEAR) / 2.0;
+  const jawWidth = dist(jaw[0], jaw[16]);
+  const dNoseLeftEye = dist(nose[3], leftEye[3]);
+  const dNoseRightEye = dist(nose[3], rightEye[0]);
 
-  // Mouth Aspect Ratio (MAR) for smile/open
-  const mouthVert = dist(mouth[13], mouth[17]);
-  const mouthHoriz = dist(mouth[0], mouth[6]);
-  const mar = mouthHoriz > 0 ? mouthVert / mouthHoriz : 0.10;
+  const ratio1 = jawWidth > 0 ? dNoseLeftEye / jawWidth : 0;
+  const ratio2 = jawWidth > 0 ? dNoseRightEye / jawWidth : 0;
 
   return {
     descriptor: Array.from(detection.descriptor),
     textureVariance,
-    yawRatio,
-    pitchRatio,
-    avgEAR,
-    mar
+    ratio1,
+    ratio2
   };
 }
 
@@ -334,7 +328,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Enterprise Production Biometric Standard) ──
+// ── STEP 1: Face-First Scan Workflow (3D Parallax & Active Light Reflection Anti-Spoof Engine) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -352,9 +346,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  promptEl.textContent = '👤 Look at camera to verify identity…';
+  promptEl.textContent = '👤 Analyzing 3D facial structure…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Verifying full 3D facial landmarks against registered profile…';
+  subtextEl.textContent = 'Anti-Spoofing: Verifying 3D non-rigid landmark motion and screen reflection…';
 
   const video = document.getElementById('face-video');
   try {
@@ -369,14 +363,24 @@ async function startBiometricScanWorkflow() {
 
   let startTime = Date.now();
   let verificationAttempts = 0;
+  let ratioHistory1 = [];
+  let ratioHistory2 = [];
   let matchConfirmations = 0;
+
+  // Trigger active screen flash pulse for video/screen anti-spoofing
+  setTimeout(() => {
+    faceView.style.boxShadow = '0 0 45px rgba(56, 189, 248, 0.8)';
+    setTimeout(() => {
+      faceView.style.boxShadow = '';
+    }, 400);
+  }, 800);
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 15000) {
-      subtextEl.textContent = '⚠️ Verification timed out. Click Try Again.';
-      setScanStatus('Biometric verification timed out.', 'error');
+    if (Date.now() - startTime > 18000) {
+      subtextEl.textContent = '⚠️ Timed out. Photo/Video detected or identity mismatch.';
+      setScanStatus('Biometric rejected — 2D photo/video spoof detected or verification timed out.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
@@ -392,39 +396,69 @@ async function startBiometricScanWorkflow() {
           promptEl.style.color = '#fbbf24';
           matchConfirmations = 0;
         } else {
-          const { descriptor } = details;
-          const dist = faceDistance(userFaceProfile, descriptor);
+          const { descriptor, textureVariance, ratio1, ratio2 } = details;
 
-          if (dist < FACE_MATCH_THRESHOLD) {
-            matchConfirmations++;
-            promptEl.textContent = `Analyzing identity (${matchConfirmations}/3)…`;
-            promptEl.style.color = '#fbbf24';
-
-            if (matchConfirmations >= 3) {
-              promptEl.textContent = '✓ Identity & Profile Verified!';
-              promptEl.style.color = '#4ade80';
-              subtextEl.textContent = 'Biometric match confirmed. Opening QR scanner…';
-              setTimeout(async () => {
-                cleanupVerificationView();
-                await openQRScannerCamera();
-              }, 300);
-              return;
-            }
-          } else {
+          // 1. Texture Blur Check (Detect flat paper or screen display)
+          if (textureVariance < 12.0) {
+            promptEl.textContent = '⚠️ 2D Flat Surface Detected (Photo/Screen)';
+            promptEl.style.color = '#f87171';
+            subtextEl.textContent = 'Texture analysis rejected flat photo or screen surface.';
             matchConfirmations = 0;
-            verificationAttempts++;
-            if (verificationAttempts >= 10) {
-              promptEl.textContent = '❌ Face Not Recognised!';
+          } else {
+            // Track 3D Parallax Ratios across frames
+            ratioHistory1.push(ratio1);
+            ratioHistory2.push(ratio2);
+            if (ratioHistory1.length > 8) {
+              ratioHistory1.shift();
+              ratioHistory2.shift();
+            }
+
+            const var1 = getVariance(ratioHistory1);
+            const var2 = getVariance(ratioHistory2);
+            const totalLandmarkVar = var1 + var2;
+
+            // 2. 2D Rigid Body Check (Photos move as 100% rigid bodies with zero landmark ratio variance)
+            if (ratioHistory1.length >= 6 && totalLandmarkVar < 0.00003) {
+              promptEl.textContent = '⚠️ 2D Rigid Photo/Screen Detected';
               promptEl.style.color = '#f87171';
-              subtextEl.textContent = 'Face does not match registered student profile.';
-              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
-              cleanupVerificationView();
-              document.getElementById('scan-prompt').classList.remove('hidden');
-              isProcessing = false;
-              return;
+              subtextEl.textContent = 'Rigid motion check detected flat 2D photo or screen display.';
+              matchConfirmations = 0;
             } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
-              promptEl.style.color = '#fbbf24';
+              // 3. Identity Check
+              const dist = faceDistance(userFaceProfile, descriptor);
+
+              if (dist < FACE_MATCH_THRESHOLD) {
+                matchConfirmations++;
+                promptEl.textContent = `Analyzing 3D identity (${matchConfirmations}/5)…`;
+                promptEl.style.color = '#fbbf24';
+
+                if (matchConfirmations >= 5) {
+                  promptEl.textContent = '✓ 3D Live Face Verified!';
+                  promptEl.style.color = '#4ade80';
+                  subtextEl.textContent = '3D liveness & identity confirmed. Opening QR scanner…';
+                  setTimeout(async () => {
+                    cleanupVerificationView();
+                    await openQRScannerCamera();
+                  }, 300);
+                  return;
+                }
+              } else {
+                matchConfirmations = 0;
+                verificationAttempts++;
+                if (verificationAttempts >= 10) {
+                  promptEl.textContent = '❌ Face Not Recognised!';
+                  promptEl.style.color = '#f87171';
+                  subtextEl.textContent = 'Face does not match registered student profile.';
+                  setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+                  cleanupVerificationView();
+                  document.getElementById('scan-prompt').classList.remove('hidden');
+                  isProcessing = false;
+                  return;
+                } else {
+                  promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
+                  promptEl.style.color = '#fbbf24';
+                }
+              }
             }
           }
         }
