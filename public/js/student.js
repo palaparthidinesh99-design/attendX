@@ -538,15 +538,17 @@ async function startBiometricScanWorkflow() {
     }
 
     // Evaluate Optical Skin Subsurface Scattering Deltas
-    let deltaRed = redFlashRGB.r - ambientRGB.r;
-    let deltaBlue = blueFlashRGB.b - ambientRGB.b;
+    let deltaRed = Math.abs(redFlashRGB.r - ambientRGB.r);
+    let deltaBlue = Math.abs(blueFlashRGB.b - ambientRGB.b);
+    let deltaGreen = Math.abs(redFlashRGB.g - ambientRGB.g);
+    let totalOpticalDelta = deltaRed + deltaBlue + deltaGreen;
 
-    // Static Paper Photo & Phone Screen displays fail light pulse reflection deltas (delta < 6)
-    if (deltaRed < 6 && deltaBlue < 6) {
-      promptEl.textContent = '⚠️ Photo / Screen Display Detected';
-      promptEl.style.color = '#f87171';
-      subtextEl.textContent = 'Optical Skin Check Failed: Paper photo or screen backlight detected (no skin reflection).';
-      pulsePhase = 0; // reset to allow real student retry
+    // Calibrated sensitivity: total optical RGB delta >= 3.0 or any single channel >= 1.8
+    if (totalOpticalDelta < 3.0 && deltaRed < 1.8 && deltaBlue < 1.8) {
+      promptEl.textContent = '⚠️ Reflection Verification Failed';
+      promptEl.style.color = '#fbbf24';
+      subtextEl.textContent = 'Increase screen brightness or hold device slightly closer to your face.';
+      pulsePhase = 0; // reset to allow instant retry
       return;
     }
 
