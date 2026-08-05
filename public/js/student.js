@@ -474,7 +474,8 @@ async function startBiometricScanWorkflow() {
 
   const video = document.getElementById('face-video');
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: faceFacingMode, width: 320, height: 240 } });
+    // Strictly enforce Front Selfie Camera ('user')
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 320, height: 240 } });
     video.srcObject = stream;
     activeStream = stream;
   } catch (err) {
@@ -527,14 +528,18 @@ async function startBiometricScanWorkflow() {
     }
     pulsePhase = 4;
 
+    // CRITICAL SECURITY FIX: Face MUST remain continuously detected in frame during light pulses!
+    if (!detRed || !detBlue || !redFlashRGB || !blueFlashRGB) {
+      promptEl.textContent = '⚠️ Face Moved / Disappeared';
+      promptEl.style.color = '#f87171';
+      subtextEl.textContent = 'Keep your face centered continuously in front of the camera during verification.';
+      pulsePhase = 0; // reset
+      return;
+    }
+
     // Evaluate Optical Skin Subsurface Scattering Deltas
-    let deltaRed = 0, deltaBlue = 0;
-    if (ambientRGB && redFlashRGB) {
-      deltaRed = redFlashRGB.r - ambientRGB.r;
-    }
-    if (ambientRGB && blueFlashRGB) {
-      deltaBlue = blueFlashRGB.b - ambientRGB.b;
-    }
+    let deltaRed = redFlashRGB.r - ambientRGB.r;
+    let deltaBlue = blueFlashRGB.b - ambientRGB.b;
 
     // Static Paper Photo & Phone Screen displays fail light pulse reflection deltas (delta < 6)
     if (deltaRed < 6 && deltaBlue < 6) {
