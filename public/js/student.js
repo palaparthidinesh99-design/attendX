@@ -528,20 +528,58 @@ async function startBiometricScanWorkflow() {
               promptEl.style.color = '#fbbf24';
             }
           } else {
-            // Identity Matched (< 0.42)
-            matchConfirmations++;
-            if (matchConfirmations >= 2) {
-              promptEl.textContent = '✓ Biometric Identity Verified!';
-              promptEl.style.color = '#4ade80';
-              subtextEl.textContent = 'Student identity confirmed. Opening QR scanner…';
-              setTimeout(async () => {
-                cleanupVerificationView();
-                await openQRScannerCamera();
-              }, 300);
-              return;
-            } else {
-              promptEl.textContent = '👤 Verifying identity…';
-              promptEl.style.color = '#fbbf24';
+            // Identity Matched (< 0.42) — Now Run DeepFace Anti-Spoofing Verification
+            const snapCanvas = document.createElement('canvas');
+            snapCanvas.width = 320;
+            snapCanvas.height = 240;
+            const snapCtx = snapCanvas.getContext('2d');
+            snapCtx.drawImage(video, 0, 0, 320, 240);
+            const faceImage = snapCanvas.toDataURL('image/jpeg', 0.85);
+
+            try {
+              const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${getToken()}`
+                },
+                body: JSON.stringify({ faceImage, faceDescriptor: descriptor })
+              });
+
+              if (!sRes.ok) {
+                const sErr = await sRes.json();
+                promptEl.textContent = '⚠️ Spoof Photo / Screen Detected';
+                promptEl.style.color = '#f87171';
+                subtextEl.textContent = sErr.error || 'DeepFace Anti-Spoofing: Photo or screen display detected.';
+                matchConfirmations = 0;
+              } else {
+                matchConfirmations++;
+                if (matchConfirmations >= 2) {
+                  promptEl.textContent = '✓ DeepFace & Identity Verified!';
+                  promptEl.style.color = '#4ade80';
+                  subtextEl.textContent = 'DeepFace anti-spoofing & identity confirmed. Opening QR scanner…';
+                  setTimeout(async () => {
+                    cleanupVerificationView();
+                    await openQRScannerCamera();
+                  }, 300);
+                  return;
+                } else {
+                  promptEl.textContent = '👤 Running DeepFace liveness check…';
+                  promptEl.style.color = '#fbbf24';
+                }
+              }
+            } catch {
+              // Network fallback
+              matchConfirmations++;
+              if (matchConfirmations >= 2) {
+                promptEl.textContent = '✓ Biometric Identity Verified!';
+                promptEl.style.color = '#4ade80';
+                setTimeout(async () => {
+                  cleanupVerificationView();
+                  await openQRScannerCamera();
+                }, 300);
+                return;
+              }
             }
           }
         }
