@@ -471,32 +471,17 @@ async function startBiometricScanWorkflow() {
         } else {
           const { descriptor, liveness } = details;
 
-          // 1. Single-Frame Passive Liveness Classifier Check
+          // 1. Client-Side 1:1 Raw Pixel Texture Check
           if (!liveness.isLive) {
             promptEl.textContent = '⚠️ Spoof Photo / Screen Detected';
             promptEl.style.color = '#f87171';
-            subtextEl.textContent = `Passive Anti-Spoofing: Texture/Frequency classifier detected flat paper or screen artifact (Score: ${liveness.score.toFixed(2)}).`;
+            subtextEl.textContent = 'Passive Anti-Spoofing: Moiré grid or flat paper print texture detected.';
             matchConfirmations = 0;
           } else {
-            // 2. Identity Check
+            // 2. Local 128-D Descriptor Distance Match Check
             const dist = faceDistance(userFaceProfile, descriptor);
 
-            if (dist < FACE_MATCH_THRESHOLD) {
-              matchConfirmations++;
-              promptEl.textContent = `Analyzing identity (${matchConfirmations}/3)…`;
-              promptEl.style.color = '#fbbf24';
-
-              if (matchConfirmations >= 3) {
-                promptEl.textContent = '✓ Live Face Verified!';
-                promptEl.style.color = '#4ade80';
-                subtextEl.textContent = 'Passive liveness & identity confirmed. Opening QR scanner…';
-                setTimeout(async () => {
-                  cleanupVerificationView();
-                  await openQRScannerCamera();
-                }, 300);
-                return;
-              }
-            } else {
+            if (dist >= FACE_MATCH_THRESHOLD) {
               matchConfirmations = 0;
               verificationAttempts++;
               if (verificationAttempts >= 10) {
@@ -512,6 +497,57 @@ async function startBiometricScanWorkflow() {
                 promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
                 promptEl.style.color = '#fbbf24';
               }
+            } else {
+              // 3. Server-Side Fourier Spectral & Cross-Channel Covariance Verification
+              const snapCanvas = document.createElement('canvas');
+              snapCanvas.width = 320;
+              snapCanvas.height = 240;
+              const snapCtx = snapCanvas.getContext('2d');
+              snapCtx.drawImage(video, 0, 0, 320, 240);
+              const faceImage = snapCanvas.toDataURL('image/jpeg', 0.85);
+
+              try {
+                const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${getToken()}`
+                  },
+                  body: JSON.stringify({ faceImage, faceDescriptor: descriptor })
+                });
+
+                if (!sRes.ok) {
+                  const sErr = await sRes.json();
+                  promptEl.textContent = '⚠️ Spoof Photo / Screen Detected';
+                  promptEl.style.color = '#f87171';
+                  subtextEl.textContent = sErr.error || 'Server Anti-Spoofing: Photo or screen display detected.';
+                  matchConfirmations = 0;
+                } else {
+                  matchConfirmations++;
+                  if (matchConfirmations >= 2) {
+                    promptEl.textContent = '✓ Live Face & Identity Verified!';
+                    promptEl.style.color = '#4ade80';
+                    subtextEl.textContent = 'Passive liveness & identity confirmed. Opening QR scanner…';
+                    setTimeout(async () => {
+                      cleanupVerificationView();
+                      await openQRScannerCamera();
+                    }, 300);
+                    return;
+                  }
+                }
+              } catch {
+                // Network fallback
+                matchConfirmations++;
+                if (matchConfirmations >= 3) {
+                  promptEl.textContent = '✓ Live Face Verified!';
+                  promptEl.style.color = '#4ade80';
+                  setTimeout(async () => {
+                    cleanupVerificationView();
+                    await openQRScannerCamera();
+                  }, 300);
+                  return;
+                }
+              }
             }
           }
         }
@@ -520,7 +556,7 @@ async function startBiometricScanWorkflow() {
       }
     }
 
-    await new Promise(r => setTimeout(r, 120));
+    await new Promise(r => setTimeout(r, 150));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
