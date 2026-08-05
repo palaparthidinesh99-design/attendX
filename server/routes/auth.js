@@ -170,17 +170,21 @@ router.post('/verify-liveness', authenticate, requireRole('student'), async (req
     if (faceImage && typeof faceImage === 'string') {
       const scriptPath = path.join(__dirname, '../../scripts/deepface_liveness.py');
       
-      const deepfaceResult = await new Promise((resolve) => {
-        execFile('python3', [scriptPath, faceImage], { timeout: 8000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-          if (err || !stdout) return resolve({ isLive: true, fallback: true });
+      const runPython = (cmd) => new Promise((resolve) => {
+        execFile(cmd, [scriptPath, faceImage], { timeout: 8000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
+          if (err || !stdout) return resolve(null);
           try {
-            const parsed = JSON.parse(stdout.trim());
-            resolve(parsed);
+            resolve(JSON.parse(stdout.trim()));
           } catch (_) {
-            resolve({ isLive: true, fallback: true });
+            resolve(null);
           }
         });
       });
+
+      let deepfaceResult = await runPython('python3');
+      if (!deepfaceResult) {
+        deepfaceResult = await runPython('python');
+      }
 
       if (deepfaceResult && deepfaceResult.isLive === false) {
         return res.status(403).json({
