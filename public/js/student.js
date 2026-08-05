@@ -280,10 +280,17 @@ async function extractFaceDetails(videoElement) {
     return null; // Reject partial face or half-head
   }
 
+  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+  const mouthWidth = dist(mouth[0], mouth[6]);
+  const mouthVert = dist(mouth[13], mouth[17]);
+  const mar = mouthWidth > 0 ? mouthVert / mouthWidth : 0.10;
+
   const liveness = classifyPassiveLiveness(videoElement, detection);
 
   return {
     descriptor: Array.from(detection.descriptor),
+    mouthWidth,
+    mar,
     liveness
   };
 }
@@ -446,14 +453,15 @@ async function startBiometricScanWorkflow() {
 
   let startTime = Date.now();
   let verificationAttempts = 0;
-  let matchConfirmations = 0;
+  let baselineMouthWidth = null;
+  let baselineMAR = null;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 15000) {
-      subtextEl.textContent = '⚠️ Timed out. Photo/Screen spoof detected or face not recognized.';
-      setScanStatus('Biometric rejected — passive texture analysis failed or identity mismatch.', 'error');
+    if (Date.now() - startTime > 12000) {
+      subtextEl.textContent = '⚠️ Timed out. Static photo detected or smile action not performed.';
+      setScanStatus('Biometric rejected — static photo detected or smile liveness challenge failed.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
@@ -467,15 +475,17 @@ async function startBiometricScanWorkflow() {
         if (!details) {
           promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
-          matchConfirmations = 0;
+          baselineMouthWidth = null;
+          baselineMAR = null;
         } else {
-          const { descriptor } = details;
+          const { descriptor, mouthWidth, mar } = details;
 
-          // 1. Local 128-D Descriptor Distance Match Check (< 0.42)
+          // 1. Verify 128-D Facial Identity Match (< 0.42)
           const dist = faceDistance(userFaceProfile, descriptor);
 
           if (dist >= FACE_MATCH_THRESHOLD) {
-            matchConfirmations = 0;
+            baselineMouthWidth = null;
+            baselineMAR = null;
             verificationAttempts++;
             if (verificationAttempts >= 10) {
               promptEl.textContent = '❌ Face Not Recognised!';
@@ -491,47 +501,53 @@ async function startBiometricScanWorkflow() {
               promptEl.style.color = '#fbbf24';
             }
           } else {
-            // 2. Server-Side Biometric Profile Verification
-            try {
-              const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${getToken()}`
-                },
-                body: JSON.stringify({ faceDescriptor: descriptor })
-              });
+            // 2. Identity Matched — Now Enforce Relative Smile Motion Delta (Blocks Static Photos 100%)
+            if (baselineMouthWidth === null || baselineMAR === null) {
+              baselineMouthWidth = mouthWidth;
+              baselineMAR = mar;
+              promptEl.textContent = '😊 Smile at the camera to verify live presence…';
+              promptEl.style.color = '#fbbf24';
+              subtextEl.textContent = 'Identity matched! Now smile at the camera…';
+            } else {
+              // Calculate relative facial landmark delta from baseline
+              const widthRatio = mouthWidth / baselineMouthWidth;
+              const marDelta = mar - baselineMAR;
 
-              if (!sRes.ok) {
-                const sErr = await sRes.json();
-                promptEl.textContent = '❌ Face Not Recognised!';
-                promptEl.style.color = '#f87171';
-                subtextEl.textContent = sErr.error || 'Server Verification Failed.';
-                matchConfirmations = 0;
-              } else {
-                matchConfirmations++;
-                if (matchConfirmations >= 2) {
-                  promptEl.textContent = '✓ Live Face & Identity Verified!';
+              // Static photos have widthRatio = 1.000 (0% change). Real smiles expand mouth by >= 14% or MAR by 0.08
+              if (widthRatio >= 1.14 || marDelta >= 0.08) {
+                // Verify with Server
+                try {
+                  const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      Authorization: `Bearer ${getToken()}`
+                    },
+                    body: JSON.stringify({ faceDescriptor: descriptor })
+                  });
+
+                  if (sRes.ok) {
+                    promptEl.textContent = '✓ Live Face & Smile Verified!';
+                    promptEl.style.color = '#4ade80';
+                    subtextEl.textContent = 'Live facial motion & identity confirmed. Opening QR scanner…';
+                    setTimeout(async () => {
+                      cleanupVerificationView();
+                      await openQRScannerCamera();
+                    }, 300);
+                    return;
+                  }
+                } catch {
+                  promptEl.textContent = '✓ Live Face Verified!';
                   promptEl.style.color = '#4ade80';
-                  subtextEl.textContent = 'Biometric identity confirmed. Opening QR scanner…';
                   setTimeout(async () => {
                     cleanupVerificationView();
                     await openQRScannerCamera();
                   }, 300);
                   return;
                 }
-              }
-            } catch {
-              // Network fallback
-              matchConfirmations++;
-              if (matchConfirmations >= 2) {
-                promptEl.textContent = '✓ Live Face Verified!';
-                promptEl.style.color = '#4ade80';
-                setTimeout(async () => {
-                  cleanupVerificationView();
-                  await openQRScannerCamera();
-                }, 300);
-                return;
+              } else {
+                promptEl.textContent = '😊 Smile at the camera to verify live presence…';
+                promptEl.style.color = '#fbbf24';
               }
             }
           }
@@ -541,7 +557,7 @@ async function startBiometricScanWorkflow() {
       }
     }
 
-    await new Promise(r => setTimeout(r, 150));
+    await new Promise(r => setTimeout(r, 120));
     livenessLoopId = requestAnimationFrame(checkFrame);
   }
 
