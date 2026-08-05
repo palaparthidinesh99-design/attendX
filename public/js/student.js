@@ -1,4 +1,4 @@
-/* student.js — face-first QR scanner, compact calendar with side panel, real-time analytics sync */
+/* student.js — Touch ID / Fingerprint Passkey hardware verification, QR scanner, calendar, analytics */
 
 const API = '';
 
@@ -24,10 +24,8 @@ function logout() {
 // ── State ───────────────────────────────────────────────────────────────
 let html5QrCode = null;
 let isProcessing = false;
-let userFaceProfile = null;
-let isFaceLocked = false;
 let activeStream = null;
-let livenessLoopId = null;
+let isPasskeyRegistered = false;
 
 window.sessionsByDateMap = {};
 let currentCalDate = new Date();
@@ -45,12 +43,8 @@ function setScanStatus(msg, type = 'info') {
   el.innerHTML = `<div class="alert ${cls}">${msg} ${retryBtn}</div>`;
 }
 
-// ── Check Saved Facial Profile Status (Hides card once locked) ─────────
-// ── WebAuthn Passkeys State ──────────────────────────────────────────────
-let isPasskeyRegistered = false;
-
-// Check Passkey Status on Page Load
-async function checkFaceProfileStatus() {
+// ── Check Passkey Registration Status on Page Load ──────────────────────
+async function checkPasskeyStatus() {
   try {
     const res = await fetch(`${API}/api/auth/webauthn-status`, {
       headers: { Authorization: `Bearer ${getToken()}` }
@@ -124,8 +118,8 @@ async function setupPasskey() {
     const verifyData = await verifyRes.json();
 
     if (verifyRes.ok && verifyData.verified) {
-      alert('✓ Hardware Passkey (TouchID / FaceID) registered successfully!');
-      checkFaceProfileStatus();
+      alert('✓ Hardware Touch ID / Fingerprint Passkey registered successfully!');
+      checkPasskeyStatus();
     } else {
       alert('Passkey verification failed: ' + (verifyData.error || 'Unknown error'));
     }
@@ -134,11 +128,6 @@ async function setupPasskey() {
     alert('Passkey setup error: ' + err.message);
   }
 }
-
-// ── 30-Second Biometric Verification Expiry Timer State ──────────
-let biometricVerifiedAt = null;
-let verificationTimerInterval = null;
-let isBiometricVerified = false;
 
 // ── 30-Second Biometric Verification Expiry Timer State ──────────
 let biometricVerifiedAt = null;
@@ -704,7 +693,7 @@ function bindStudentEventListeners() {
 // ── Init & Real-Time Sync Polling ──────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   bindStudentEventListeners();
-  checkFaceProfileStatus();
+  checkPasskeyStatus();
   loadAnalytics();
 
   setInterval(loadAnalytics, 6000);
@@ -712,6 +701,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 if (document.readyState !== 'loading') {
   bindStudentEventListeners();
-  checkFaceProfileStatus();
+  checkPasskeyStatus();
   loadAnalytics();
 }
