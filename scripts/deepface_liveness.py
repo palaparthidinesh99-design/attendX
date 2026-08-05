@@ -118,20 +118,24 @@ def classify_anti_spoofing(base64_img):
         specular_pixels = np.sum((img[:, :, 0] > 248) & (img[:, :, 1] > 248) & (img[:, :, 2] > 248))
         specular_ratio = specular_pixels / float(h * w)
 
+        # Adaptive Resolution Scaling (Dynamically adapts thresholds for 720p HD & 480p SD webcams)
+        res_ratio = min(1.0, (w * h) / (1920.0 * 1080.0))
+        min_laplacian = 26.0 * (0.65 + 0.35 * res_ratio)
+
         # Multi-feature anti-spoofing classifier decision logic
         is_spoof = False
         reason = None
 
-        if laplacian_var < 26.0:
+        if laplacian_var < min_laplacian:
             is_spoof = True
-            reason = f"Paper printout or blurred screen photo (Laplacian Var: {laplacian_var:.1f})"
-        elif lbp_uniformity > 0.08:
+            reason = f"Paper printout or blurred screen photo (Laplacian Var: {laplacian_var:.1f}, min: {min_laplacian:.1f})"
+        elif lbp_uniformity > 0.085:
             is_spoof = True
             reason = f"Artificial LBP micro-texture pattern detected (LBP Uniformity: {lbp_uniformity:.3f})"
-        elif specular_ratio > 0.015:
+        elif specular_ratio > 0.018:
             is_spoof = True
             reason = f"Screen glass specular glare detected (Specular Ratio: {specular_ratio:.3f})"
-        elif high_freq_ratio > 0.70 or high_freq_ratio < 0.07:
+        elif high_freq_ratio > 0.72 or high_freq_ratio < 0.06:
             is_spoof = True
             reason = f"Moiré screen grid pattern detected (FFT Ratio: {high_freq_ratio:.2f})"
 
