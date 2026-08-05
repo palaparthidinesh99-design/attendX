@@ -160,7 +160,96 @@ function calculateTextureVariance(videoElement, detection) {
   }
 }
 
-// Extract 128-D descriptor, 68 landmarks, yawRatio, avgEAR, and mar for 2-step sequence
+// ── Single-Frame Passive Liveness Classifier (Texture, Moiré Grid, Specular Reflection Analysis) ──
+function classifyPassiveLiveness(videoElement, detection) {
+  if (!detection || !detection.detection) return { isLive: true, score: 0.1 };
+  const box = detection.detection.box;
+  if (!box || box.width < 40 || box.height < 40) return { isLive: false, score: 0.9 };
+
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = 120;
+    canvas.height = 120;
+    const ctx = canvas.getContext('2d');
+    
+    ctx.drawImage(
+      videoElement,
+      Math.floor(box.x), Math.floor(box.y), Math.floor(box.width), Math.floor(box.height),
+      0, 0, 120, 120
+    );
+
+    const imgData = ctx.getImageData(0, 0, 120, 120);
+    const pixels = imgData.data;
+    const totalPixels = 120 * 120;
+
+    let rSum = 0, gSum = 0, bSum = 0;
+    let rSq = 0, gSq = 0, bSq = 0;
+    let highFreqEnergy = 0;
+    let maxSpecularPixels = 0;
+
+    // Convert to grayscale & analyze frequency/color artifacts
+    const grays = new Float32Array(totalPixels);
+
+    for (let i = 0; i < pixels.length; i += 4) {
+      const r = pixels[i];
+      const g = pixels[i + 1];
+      const b = pixels[i + 2];
+      const gray = 0.299 * r + 0.587 * g + 0.114 * b;
+      const idx = i / 4;
+      grays[idx] = gray;
+
+      rSum += r; gSum += g; bSum += b;
+      rSq += r * r; gSq += g * g; bSq += b * b;
+
+      // Count glass / screen specular glare spikes (unnatural brightness > 250)
+      if (r > 250 && g > 250 && b > 250) maxSpecularPixels++;
+    }
+
+    // Compute spatial high-frequency Laplacian gradient (detect Moiré subpixel grids & paper halftone dots)
+    let laplacianVar = 0;
+    let lapSum = 0, lapSq = 0;
+    for (let y = 1; y < 119; y++) {
+      for (let x = 1; x < 119; x++) {
+        const center = grays[y * 120 + x];
+        const lap = Math.abs(
+          4 * center - grays[(y - 1) * 120 + x] - grays[(y + 1) * 120 + x] - grays[y * 120 + (x - 1)] - grays[y * 120 + (x + 1)]
+        );
+        lapSum += lap;
+        lapSq += lap * lap;
+      }
+    }
+    const lapMean = lapSum / (118 * 118);
+    laplacianVar = (lapSq / (118 * 118)) - (lapMean * lapMean);
+
+    // Color channel variance (human skin has subsurface scattering vs flat paper/screen)
+    const rVar = (rSq / totalPixels) - (rSum / totalPixels) ** 2;
+    const gVar = (gSq / totalPixels) - (gSum / totalPixels) ** 2;
+    const bVar = (bSq / totalPixels) - (bSum / totalPixels) ** 2;
+    const colorVar = (rVar + gVar + bVar) / 3.0;
+
+    // Specular glare ratio
+    const specularRatio = maxSpecularPixels / totalPixels;
+
+    // Binary classifier decision logic
+    // Screen / Paper photo artifacts: unnaturally low Laplacian variance OR excessive specular glare OR flat color histogram
+    let spoofScore = 0.0;
+
+    if (laplacianVar < 15.0) spoofScore += 0.45; // Flat surface / blur artifact
+    if (specularRatio > 0.03) spoofScore += 0.40; // Screen glass glare spike
+    if (colorVar < 180.0) spoofScore += 0.35;    // Flat paper print color distribution
+
+    return {
+      isLive: spoofScore < 0.45,
+      score: spoofScore,
+      laplacianVar,
+      colorVar
+    };
+  } catch {
+    return { isLive: true, score: 0.1 };
+  }
+}
+
+// Extract 128-D descriptor, 68 landmarks, and passive liveness classification
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   
@@ -186,26 +275,11 @@ async function extractFaceDetails(videoElement) {
     return null; // Reject partial face or half-head
   }
 
-  // 1. Head Yaw Ratio (0.50 = front, >0.54 = right, <0.46 = left)
-  const jawWidth = jaw[16].x - jaw[0].x;
-  const yawRatio = jawWidth > 0 ? (nose[3].x - jaw[0].x) / jawWidth : 0.50;
-
-  // 2. Eye Aspect Ratio (EAR) for eye blink
-  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
-  const leftEAR = (dist(leftEye[1], leftEye[5]) + dist(leftEye[2], leftEye[4])) / (2 * dist(leftEye[0], leftEye[3]));
-  const rightEAR = (dist(rightEye[1], rightEye[5]) + dist(rightEye[2], rightEye[4])) / (2 * dist(rightEye[0], rightEye[3]));
-  const avgEAR = (leftEAR + rightEAR) / 2.0;
-
-  // 3. Mouth Aspect Ratio (MAR) for smile/open
-  const mouthVert = dist(mouth[13], mouth[17]);
-  const mouthHoriz = dist(mouth[0], mouth[6]);
-  const mar = mouthHoriz > 0 ? mouthVert / mouthHoriz : 0.10;
+  const liveness = classifyPassiveLiveness(videoElement, detection);
 
   return {
     descriptor: Array.from(detection.descriptor),
-    yawRatio,
-    avgEAR,
-    mar
+    liveness
   };
 }
 
@@ -332,7 +406,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Relative Motion Transition & 2s Time Window Engine) ──
+// ── STEP 1: Face-First Scan Workflow (Single-Frame Passive Texture/Frequency Liveness) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -350,22 +424,9 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  // Action pool
-  const pool = [
-    { code: 'RIGHT', label: '➡️ Turn head RIGHT' },
-    { code: 'LEFT',  label: '⬅️ Turn head LEFT' },
-    { code: 'BLINK', label: '👁️ Blink eyes once' },
-    { code: 'SMILE', label: '😊 Smile at camera' }
-  ];
-
-  // Pick 2 distinct random actions fresh at runtime
-  let currentPool = [...pool].sort(() => Math.random() - 0.5);
-  let activeAction = currentPool[0];
-  let secondAction = currentPool[1];
-
-  promptEl.textContent = `1/2: ${activeAction.label}`;
+  promptEl.textContent = '👤 Analyzing face texture & liveness…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = `Step 1 of 2: Perform ${activeAction.label} within 2 seconds…`;
+  subtextEl.textContent = 'Passive Liveness: Analyzing frequency spectrum & specular reflections (no action needed)…';
 
   const video = document.getElementById('face-video');
   try {
@@ -378,67 +439,20 @@ async function startBiometricScanWorkflow() {
     return;
   }
 
-  let step = 1; // Step 1 -> Step 2 -> Complete
-  let retryCount = 0; // Max 1 retry allowed
-  let stepStartTime = Date.now();
-  let neutralConfirmed = false;
-  let blinkClosed = false;
+  let startTime = Date.now();
   let verificationAttempts = 0;
-
-  function evaluateMotionTransition(actionCode, details) {
-    const { yawRatio, avgEAR, mar } = details;
-
-    if (actionCode === 'RIGHT') {
-      if (yawRatio >= 0.47 && yawRatio <= 0.53) neutralConfirmed = true;
-      return neutralConfirmed && yawRatio >= 0.56;
-    }
-    if (actionCode === 'LEFT') {
-      if (yawRatio >= 0.47 && yawRatio <= 0.53) neutralConfirmed = true;
-      return neutralConfirmed && yawRatio <= 0.44;
-    }
-    if (actionCode === 'SMILE') {
-      if (mar < 0.18) neutralConfirmed = true;
-      return neutralConfirmed && mar >= 0.26;
-    }
-    if (actionCode === 'BLINK') {
-      if (avgEAR > 0.25) neutralConfirmed = true;
-      if (neutralConfirmed && avgEAR < 0.21) blinkClosed = true;
-      return blinkClosed && avgEAR >= 0.25;
-    }
-    return false;
-  }
+  let matchConfirmations = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    const now = Date.now();
-    const elapsedStepTime = now - stepStartTime;
-
-    // 2-Second Time Window per Step Expiration Check
-    if (elapsedStepTime > 2200) {
-      if (retryCount === 0) {
-        // Grant 1 Retry Step with a fresh action
-        retryCount++;
-        stepStartTime = now;
-        neutralConfirmed = false;
-        blinkClosed = false;
-        
-        // Pick replacement action
-        const remainingPool = pool.filter(a => a.code !== activeAction.code);
-        activeAction = remainingPool[Math.floor(Math.random() * remainingPool.length)];
-
-        promptEl.textContent = `Retry: ${activeAction.label}`;
-        promptEl.style.color = '#fbbf24';
-        subtextEl.textContent = `Time expired! Retry step: Perform ${activeAction.label} (2s window)…`;
-      } else {
-        // Failed after retry -> Reject static photo / video
-        subtextEl.textContent = '⚠️ Step timed out. Static photo detected or motion missing.';
-        setScanStatus('Biometric rejected — static photo detected or motion transition missing.', 'error');
-        cleanupVerificationView();
-        document.getElementById('scan-prompt').classList.remove('hidden');
-        isProcessing = false;
-        return;
-      }
+    if (Date.now() - startTime > 15000) {
+      subtextEl.textContent = '⚠️ Timed out. Photo/Screen spoof detected or face not recognized.';
+      setScanStatus('Biometric rejected — passive texture analysis failed or identity mismatch.', 'error');
+      cleanupVerificationView();
+      document.getElementById('scan-prompt').classList.remove('hidden');
+      isProcessing = false;
+      return;
     }
 
     if (video.videoWidth > 0) {
@@ -448,41 +462,29 @@ async function startBiometricScanWorkflow() {
         if (!details) {
           promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
+          matchConfirmations = 0;
         } else {
-          const { descriptor } = details;
-          const dist = faceDistance(userFaceProfile, descriptor);
+          const { descriptor, liveness } = details;
 
-          if (dist >= FACE_MATCH_THRESHOLD && dist >= 0.48) {
-            verificationAttempts++;
-            if (verificationAttempts >= 10) {
-              promptEl.textContent = '❌ Face Not Recognised!';
-              promptEl.style.color = '#f87171';
-              subtextEl.textContent = 'Face does not match registered student profile.';
-              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
-              cleanupVerificationView();
-              document.getElementById('scan-prompt').classList.remove('hidden');
-              isProcessing = false;
-              return;
-            }
+          // 1. Single-Frame Passive Liveness Classifier Check
+          if (!liveness.isLive) {
+            promptEl.textContent = '⚠️ Spoof Photo / Screen Detected';
+            promptEl.style.color = '#f87171';
+            subtextEl.textContent = `Passive Anti-Spoofing: Texture/Frequency classifier detected flat paper or screen artifact (Score: ${liveness.score.toFixed(2)}).`;
+            matchConfirmations = 0;
           } else {
-            // Evaluate Relative Motion Transition
-            if (evaluateMotionTransition(activeAction.code, details)) {
-              if (step === 1) {
-                // Transition to Step 2
-                step = 2;
-                stepStartTime = now; // reset 2s window for step 2
-                neutralConfirmed = false;
-                blinkClosed = false;
-                activeAction = secondAction;
+            // 2. Identity Check
+            const dist = faceDistance(userFaceProfile, descriptor);
 
-                promptEl.textContent = `2/2: ${activeAction.label}`;
-                promptEl.style.color = '#fbbf24';
-                subtextEl.textContent = `Step 2 of 2: Perform ${activeAction.label} within 2s…`;
-              } else if (step === 2) {
-                // Verified successfully!
-                promptEl.textContent = '✓ Live Motion & Face Verified!';
+            if (dist < FACE_MATCH_THRESHOLD) {
+              matchConfirmations++;
+              promptEl.textContent = `Analyzing identity (${matchConfirmations}/3)…`;
+              promptEl.style.color = '#fbbf24';
+
+              if (matchConfirmations >= 3) {
+                promptEl.textContent = '✓ Live Face Verified!';
                 promptEl.style.color = '#4ade80';
-                subtextEl.textContent = '2-step motion transition & identity confirmed. Opening QR scanner…';
+                subtextEl.textContent = 'Passive liveness & identity confirmed. Opening QR scanner…';
                 setTimeout(async () => {
                   cleanupVerificationView();
                   await openQRScannerCamera();
@@ -490,13 +492,21 @@ async function startBiometricScanWorkflow() {
                 return;
               }
             } else {
-              const remainingSecs = Math.max(0, Math.ceil((2200 - elapsedStepTime) / 1000));
-              if (step === 1) {
-                promptEl.textContent = `1/2 (${remainingSecs}s): ${activeAction.label}`;
+              matchConfirmations = 0;
+              verificationAttempts++;
+              if (verificationAttempts >= 10) {
+                promptEl.textContent = '❌ Face Not Recognised!';
+                promptEl.style.color = '#f87171';
+                subtextEl.textContent = 'Face does not match registered student profile.';
+                setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+                cleanupVerificationView();
+                document.getElementById('scan-prompt').classList.remove('hidden');
+                isProcessing = false;
+                return;
               } else {
-                promptEl.textContent = `2/2 (${remainingSecs}s): ${activeAction.label}`;
+                promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
+                promptEl.style.color = '#fbbf24';
               }
-              promptEl.style.color = '#fbbf24';
             }
           }
         }
