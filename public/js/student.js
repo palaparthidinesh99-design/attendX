@@ -497,11 +497,6 @@ function renderInteractiveCalendar() {
   const month = currentCalDate.getMonth();
   const monthName = currentCalDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
-  // Calculate month difference from current month (1-year past limit = 12 months)
-  const monthsDiff = (now.getFullYear() - year) * 12 + (now.getMonth() - month);
-  const canGoPrev = monthsDiff < 12;
-  const canGoNext = monthsDiff > 0;
-
   const firstDayIndex = new Date(year, month, 1).getDay();
   const lastDate = new Date(year, month + 1, 0).getDate();
 
@@ -534,45 +529,46 @@ function renderInteractiveCalendar() {
     }
 
     dayCells += `
-      <div class="cal-day-cell ${isToday ? 'today' : ''} ${isSelected ? 'selected-day' : ''} ${!sessions.length ? 'has-no-class' : ''}" onclick="window.selectCalendarDate('${dStr}')">
+      <div class="cal-day-cell ${isToday ? 'today' : ''} ${isSelected ? 'selected-day' : ''}" onclick="window.selectCalendarDate('${dStr}')">
         <span class="cal-day-num">${day}</span>
         <div class="cal-dots">${dotsHtml}</div>
       </div>`;
   }
 
-  const isCurrentMonth = monthsDiff === 0;
+  const isCurrentMonth = (now.getFullYear() === year && now.getMonth() === month);
 
   container.innerHTML = `
     <div class="calendar-month-header">
-      <div class="flex items-center gap-1">
-        <button type="button" class="btn btn-ghost btn-sm" ${!canGoPrev ? 'disabled' : ''} onclick="window.changeCalMonth(-1)">← Prev</button>
-        <button type="button" class="btn btn-ghost btn-sm" ${!canGoNext ? 'disabled' : ''} onclick="window.changeCalMonth(1)">Next →</button>
-        ${!isCurrentMonth ? `<button type="button" class="btn btn-ghost btn-sm" style="color:var(--accent-primary);" onclick="window.resetToCurrentMonth()">Today</button>` : ''}
-      </div>
-      <div class="flex items-center gap-1">
-        <span class="calendar-month-title">${monthName}</span>
-        ${monthsDiff > 0 ? `<span class="badge badge-purple" style="font-size:0.7rem;">Past History (${monthsDiff}m ago)</span>` : ''}
+      <div class="calendar-month-title">${monthName}</div>
+      <div class="calendar-nav-group">
+        <button type="button" class="cal-nav-btn" id="cal-prev-btn" title="Previous Month">◀</button>
+        <button type="button" class="cal-nav-btn" id="cal-next-btn" title="Next Month">▶</button>
+        ${!isCurrentMonth ? `<button type="button" class="cal-today-btn" id="cal-today-btn">📆 Today</button>` : ''}
       </div>
     </div>
     <div class="calendar-month-grid">
       ${daysHeader}
       ${dayCells}
     </div>
+    <div class="calendar-legend">
+      <div class="legend-item"><span class="cal-dot green"></span> Attended</div>
+      <div class="legend-item"><span class="cal-dot blue"></span> Live Class</div>
+      <div class="legend-item"><span class="cal-dot red"></span> Missed</div>
+      <div class="legend-item"><span style="width:6px;height:6px;border-radius:50%;background:var(--border);"></span> Off Day</div>
+    </div>
   `;
+
+  // Attach controls event listeners directly
+  document.getElementById('cal-prev-btn')?.addEventListener('click', () => changeCalMonth(-1));
+  document.getElementById('cal-next-btn')?.addEventListener('click', () => changeCalMonth(1));
+  document.getElementById('cal-today-btn')?.addEventListener('click', () => resetToCurrentMonth());
 
   renderSidePanelDayDetails(selectedDateStr || todayStr);
 }
 
 function changeCalMonth(delta) {
-  const now = new Date();
-  const target = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + delta, 1);
-  const monthsDiff = (now.getFullYear() - target.getFullYear()) * 12 + (now.getMonth() - target.getMonth());
-
-  // Restrict navigation between current month and 12 months in the past
-  if (monthsDiff >= 0 && monthsDiff <= 12) {
-    currentCalDate = target;
-    renderInteractiveCalendar();
-  }
+  currentCalDate = new Date(currentCalDate.getFullYear(), currentCalDate.getMonth() + delta, 1);
+  renderInteractiveCalendar();
 }
 
 function resetToCurrentMonth() {
@@ -586,7 +582,7 @@ function selectCalendarDate(dateStr) {
   renderInteractiveCalendar();
 }
 
-// ── Render Day Details in Side Panel (Attended vs Ongoing vs Missed vs No Class) ─────
+// ── Render Day Details in Side Panel ─────────────────────────────────────
 function renderSidePanelDayDetails(dateStr) {
   selectedDateStr = dateStr;
   const sessions = window.sessionsByDateMap[dateStr] || [];
@@ -603,17 +599,23 @@ function renderSidePanelDayDetails(dateStr) {
   } catch (_) {}
 
   if (titleEl) titleEl.textContent = `📅 ${formattedDate}`;
-  if (subEl) subEl.textContent = sessions.length ? `${sessions.length} class session(s) held` : 'No Class Scheduled';
 
   if (contentEl) {
     if (!sessions.length) {
+      if (subEl) subEl.textContent = 'No Lectures Recorded';
       contentEl.innerHTML = `
-        <div style="padding:1.5rem 1rem;text-align:center;background:rgba(255,255,255,0.02);border:1px dashed var(--border);border-radius:var(--radius-sm);margin-top:0.5rem;">
-          <div style="font-size:1.8rem;margin-bottom:0.4rem;">☕</div>
-          <strong style="font-size:0.9rem;color:var(--text-primary);display:block;">No Class Scheduled</strong>
-          <p style="font-size:0.78rem;color:var(--text-muted);margin-top:0.25rem;">No lecture sessions were held on ${formattedDate}.</p>
+        <div style="padding:1.25rem 1rem;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);text-align:center;">
+          <div style="font-size:1.6rem;margin-bottom:0.3rem;">🌴</div>
+          <strong style="font-size:0.88rem;color:var(--text-primary);display:block;">Off Day / Holiday</strong>
+          <p style="font-size:0.78rem;color:var(--text-muted);margin-top:0.25rem;line-height:1.4;">
+            No lecture sessions were held on this date.
+          </p>
+          <div style="margin-top:0.75rem;padding-top:0.6rem;border-top:1px solid var(--border);font-size:0.72rem;color:var(--accent-primary);font-weight:600;">
+            💡 Select colored calendar dates to view class attendance.
+          </div>
         </div>`;
     } else {
+      if (subEl) subEl.textContent = `${sessions.length} class session(s) conducted`;
       contentEl.innerHTML = sessions.map(s => {
         let badge = '';
         if (s.status === 'PRESENT') {
@@ -621,23 +623,23 @@ function renderSidePanelDayDetails(dateStr) {
         } else if (s.status === 'ONGOING') {
           badge = `<span class="badge badge-blue">▶ Live Class</span>`;
         } else {
-          badge = `<span class="badge badge-red">❌ Missed Class</span>`;
+          badge = `<span class="badge badge-red">❌ Missed</span>`;
         }
 
         const meta = s.status === 'PRESENT'
           ? `🕒 Check-in: ${s.timeString} &nbsp;|&nbsp; 📍 ${s.distanceMeters != null ? s.distanceMeters + 'm' : 'Verified'}`
           : s.status === 'ONGOING'
-            ? `Instructor: ${s.teacherName} (Class live now — click Verify Face & Scan above)`
+            ? `Instructor: ${s.teacherName} (Class in progress)`
             : `Instructor: ${s.teacherName} (Ended at ${s.timeString})`;
 
         return `
-          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.75rem;">
+          <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.85rem;">
             <div class="flex items-center justify-between mb-1">
-              <strong style="font-size:0.85rem;color:var(--text-primary);">${s.courseCode}</strong>
+              <strong style="font-size:0.88rem;color:var(--text-primary);">${s.courseCode}</strong>
               ${badge}
             </div>
-            <div style="font-size:0.78rem;color:var(--text-secondary);">${s.className}</div>
-            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;">${meta}</div>
+            <div style="font-size:0.8rem;color:var(--text-secondary);font-weight:500;">${s.className}</div>
+            <div style="font-size:0.73rem;color:var(--text-muted);margin-top:0.4rem;">${meta}</div>
           </div>`;
       }).join('');
     }
