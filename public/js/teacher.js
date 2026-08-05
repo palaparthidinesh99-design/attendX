@@ -424,24 +424,45 @@ async function endSession() {
 }
 
 // ── QR Polling ──────────────────────────────────────────────────────────
+// ── QR Rotation & Continuous Smooth Timer Sync Engine ───────────────────
+let currentWindowIndex = -1;
+
 function startQRPolling() {
-  fetchAndRenderQR();
-  qrPollInterval = setInterval(fetchAndRenderQR, 4000);
-  startCountdown();
+  if (qrPollInterval) clearInterval(qrPollInterval);
+  currentWindowIndex = -1;
+  updateQRSyncLoop();
+  qrPollInterval = setInterval(updateQRSyncLoop, 100);
 }
 
-async function fetchAndRenderQR() {
+async function updateQRSyncLoop() {
   if (!activeSessionId) return;
 
-  try {
-    const res = await fetch(`${API}/api/sessions/${activeSessionId}/token`);
-    if (!res.ok) return;
+  const WINDOW_MS = 15000;
+  const now = Date.now();
+  const winIdx = Math.floor(now / WINDOW_MS);
+  const remainingMs = WINDOW_MS - (now % WINDOW_MS);
+  const remainingSecs = Math.max(1, Math.ceil(remainingMs / 1000));
 
-    const data = await res.json();
-    renderQR(data.qrPayload);
-    resetCountdown(Math.ceil(data.windowExpiresIn / 1000));
-  } catch (err) {
-    console.error('QR fetch error:', err);
+  // 1. Smooth UI Countdown & Bar Update
+  const el = document.getElementById('qr-countdown');
+  const bar = document.getElementById('qr-progress-bar');
+  if (el) el.textContent = remainingSecs;
+  if (bar) {
+    const pct = (remainingMs / WINDOW_MS) * 100;
+    bar.style.width = pct.toFixed(1) + '%';
+  }
+
+  // 2. Fetch fresh QR payload on 15-second window rollover
+  if (winIdx !== currentWindowIndex) {
+    currentWindowIndex = winIdx;
+    try {
+      const res = await fetch(`${API}/api/sessions/${activeSessionId}/token`);
+      if (!res.ok) return;
+      const data = await res.json();
+      renderQR(data.qrPayload);
+    } catch (err) {
+      console.error('QR fetch error:', err);
+    }
   }
 }
 
@@ -461,36 +482,6 @@ function renderQR(payload) {
       colorLight: '#ffffff',
       correctLevel: QRCode.CorrectLevel.M
     });
-  }
-}
-
-// ── Countdown Timer ─────────────────────────────────────────────────────
-let countdownValue = 15;
-
-function startCountdown() {
-  if (countdownInterval) clearInterval(countdownInterval);
-  countdownInterval = setInterval(tickCountdown, 1000);
-}
-
-function resetCountdown(seconds) {
-  countdownValue = seconds;
-  updateCountdownUI();
-}
-
-function tickCountdown() {
-  if (countdownValue > 0) {
-    countdownValue--;
-    updateCountdownUI();
-  }
-}
-
-function updateCountdownUI() {
-  const el = document.getElementById('qr-countdown');
-  const bar = document.getElementById('qr-progress-bar');
-  if (el) el.textContent = countdownValue;
-  if (bar) {
-    const pct = (countdownValue / 15) * 100;
-    bar.style.width = pct + '%';
   }
 }
 
@@ -617,7 +608,6 @@ function bindEventListeners() {
   document.getElementById('btn-close-enroll-modal')?.addEventListener('click', hideEnrollModal);
   document.getElementById('btn-cancel-enroll-modal')?.addEventListener('click', hideEnrollModal);
   document.getElementById('use-location-btn')?.addEventListener('click', useCurrentLocation);
-  document.getElementById('demo-location-btn')?.addEventListener('click', fillDemoLocation);
   document.getElementById('start-session-btn')?.addEventListener('click', startSession);
   document.getElementById('end-session-btn')?.addEventListener('click', endSession);
   document.getElementById('export-csv-btn')?.addEventListener('click', exportCSV);

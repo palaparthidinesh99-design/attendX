@@ -141,12 +141,15 @@ router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, 
       }
     }
 
-    const filename = `Attendance_${session.className.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date(session.startTime).toISOString().split('T')[0]}.csv`;
+    const formatISTDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) : '-';
+    const formatISTTime = (d) => d ? `${new Date(d).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })} IST` : '-';
+
+    const filename = `Attendance_${session.className.replace(/[^a-zA-Z0-9]/g, '_')}_${formatISTDate(session.startTime).replace(/\//g, '-')}.csv`;
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-    let csvContent = `"Course Code","Session Name","Date","Roll Number","Student Name","Student Email","Status","Timestamp","Distance (m)"\n`;
+    let csvContent = `"Course Code","Session Name","Date (IST)","Roll Number","Student Name","Student Email","Status","Timestamp (IST)","Distance (m)"\n`;
 
     const courseCode = session.className.split('—')[0]?.trim() || 'Class';
 
@@ -156,9 +159,9 @@ router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, 
       const roll = s.rollNumber ? `"${s.rollNumber.replace(/"/g, '""')}"` : '"-"';
       const name = s.name ? `"${s.name.replace(/"/g, '""')}"` : '"Unknown"';
       const email = s.email ? `"${s.email.replace(/"/g, '""')}"` : '"-"';
-      const time = `"${new Date(r.timestamp).toLocaleTimeString()}"`;
+      const time = `"${formatISTTime(r.timestamp)}"`;
       const dist = r.distanceMeters != null ? `"${r.distanceMeters}m"` : '"-"';
-      csvContent += `"${courseCode}","${session.className.replace(/"/g, '""')}","${new Date(session.startTime).toLocaleDateString()}",${roll},${name},${email},"PRESENT",${time},${dist}\n`;
+      csvContent += `"${courseCode}","${session.className.replace(/"/g, '""')}","${formatISTDate(session.startTime)}",${roll},${name},${email},"PRESENT",${time},${dist}\n`;
     }
 
     // Output enrolled students who were ABSENT
@@ -167,7 +170,7 @@ router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, 
         const studentUser = await User.findOne({ email: emailStr });
         const roll = studentUser?.rollNumber ? `"${studentUser.rollNumber.replace(/"/g, '""')}"` : '"-"';
         const name = studentUser?.name ? `"${studentUser.name.replace(/"/g, '""')}"` : '"Enrolled Student"';
-        csvContent += `"${courseCode}","${session.className.replace(/"/g, '""')}","${new Date(session.startTime).toLocaleDateString()}",${roll},${name},"${emailStr}","ABSENT","-","-"\n`;
+        csvContent += `"${courseCode}","${session.className.replace(/"/g, '""')}","${formatISTDate(session.startTime)}",${roll},${name},"${emailStr}","ABSENT","-","-"\n`;
       }
     }
 

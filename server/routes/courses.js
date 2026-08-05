@@ -139,11 +139,14 @@ router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, 
     // Find latest session for this course
     const latestSession = await Session.findOne({ courseId: course._id }).sort({ startTime: -1 });
 
-    const filename = `Attendance_${course.courseCode}_${new Date().toISOString().split('T')[0]}.csv`;
+    const formatISTDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) : '-';
+    const formatISTTime = (d) => d ? `${new Date(d).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })} IST` : '-';
+
+    const filename = `Attendance_${course.courseCode}_${formatISTDate(new Date()).replace(/\//g, '-')}.csv`;
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-    let csvContent = `"Course Code","Course Name","Date","Roll Number","Student Name","Student Email","Status","Timestamp","Distance (m)"\n`;
+    let csvContent = `"Course Code","Course Name","Date (IST)","Roll Number","Student Name","Student Email","Status","Timestamp (IST)","Distance (m)"\n`;
 
     if (!latestSession) {
       // Export enrolled roster if no sessions held yet
@@ -151,7 +154,7 @@ router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, 
         const studentUser = await User.findOne({ email: emailStr.toLowerCase() });
         const roll = studentUser?.rollNumber ? `"${studentUser.rollNumber.replace(/"/g, '""')}"` : '"-"';
         const name = studentUser?.name ? `"${studentUser.name.replace(/"/g, '""')}"` : '"Enrolled Student"';
-        csvContent += `"${course.courseCode}","${course.courseName.replace(/"/g, '""')}","${new Date().toLocaleDateString()}",${roll},${name},"${emailStr}","ENROLLED","-","-"\n`;
+        csvContent += `"${course.courseCode}","${course.courseName.replace(/"/g, '""')}","${formatISTDate(new Date())}",${roll},${name},"${emailStr}","ENROLLED","-","-"\n`;
       }
       return res.status(200).send(csvContent);
     }
@@ -173,9 +176,9 @@ router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, 
       const roll = s.rollNumber ? `"${s.rollNumber.replace(/"/g, '""')}"` : '"-"';
       const name = s.name ? `"${s.name.replace(/"/g, '""')}"` : '"Unknown"';
       const email = s.email ? `"${s.email.replace(/"/g, '""')}"` : '"-"';
-      const time = `"${new Date(r.timestamp).toLocaleTimeString()}"`;
+      const time = `"${formatISTTime(r.timestamp)}"`;
       const dist = r.distanceMeters != null ? `"${r.distanceMeters}m"` : '"-"';
-      csvContent += `"${course.courseCode}","${latestSession.className.replace(/"/g, '""')}","${new Date(latestSession.startTime).toLocaleDateString()}",${roll},${name},${email},"PRESENT",${time},${dist}\n`;
+      csvContent += `"${course.courseCode}","${latestSession.className.replace(/"/g, '""')}","${formatISTDate(latestSession.startTime)}",${roll},${name},${email},"PRESENT",${time},${dist}\n`;
     }
 
     for (let emailStr of (course.enrolledEmails || [])) {
@@ -183,7 +186,7 @@ router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, 
         const studentUser = await User.findOne({ email: emailStr.toLowerCase() });
         const roll = studentUser?.rollNumber ? `"${studentUser.rollNumber.replace(/"/g, '""')}"` : '"-"';
         const name = studentUser?.name ? `"${studentUser.name.replace(/"/g, '""')}"` : '"Enrolled Student"';
-        csvContent += `"${course.courseCode}","${latestSession.className.replace(/"/g, '""')}","${new Date(latestSession.startTime).toLocaleDateString()}",${roll},${name},"${emailStr}","ABSENT","-","-"\n`;
+        csvContent += `"${course.courseCode}","${latestSession.className.replace(/"/g, '""')}","${formatISTDate(latestSession.startTime)}",${roll},${name},"${emailStr}","ABSENT","-","-"\n`;
       }
     }
 
