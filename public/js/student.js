@@ -46,9 +46,13 @@ function setScanStatus(msg, type = 'info') {
 }
 
 // ── Check Saved Facial Profile Status (Hides card once locked) ─────────
+// ── WebAuthn Passkeys State ──────────────────────────────────────────────
+let isPasskeyRegistered = false;
+
+// Check Passkey Status on Page Load
 async function checkFaceProfileStatus() {
   try {
-    const res = await fetch(`${API}/api/auth/face-profile`, {
+    const res = await fetch(`${API}/api/auth/webauthn-status`, {
       headers: { Authorization: `Bearer ${getToken()}` }
     });
     if (!res.ok) {
@@ -56,545 +60,145 @@ async function checkFaceProfileStatus() {
       return;
     }
     const data = await res.json();
+    isPasskeyRegistered = data.isRegistered;
 
-    const setupCard = document.getElementById('card-face-setup');
+    const setupCard = document.getElementById('card-passkey-setup');
+    const badge = document.getElementById('passkey-status-badge');
 
-    if (data.hasFaceProfile) {
-      userFaceProfile = data.faceDescriptor;
-      isFaceLocked = true;
+    if (data.isRegistered) {
+      if (badge) {
+        badge.textContent = '✓ Passkey Active';
+        badge.className = 'badge badge-green';
+      }
       if (setupCard) setupCard.style.display = 'none';
     } else {
-      isFaceLocked = false;
-      userFaceProfile = null;
+      if (badge) {
+        badge.textContent = 'Not Registered';
+        badge.className = 'badge badge-red';
+      }
       if (setupCard) setupCard.style.display = 'block';
     }
   } catch (err) {
-    console.error('Face profile status check error:', err);
+    console.error('Passkey status check error:', err);
   }
 }
 
-// ── face-api.js Neural Net Face Recognition ───────────────────────────────
-// Uses: SSD MobileNet (detection) + 68-pt landmarks + ResNet128 (embedding)
-// Models are served locally from /models/ — no external calls at runtime.
-let faceApiReady = false;
-let faceApiLoadPromise = null;
-
-async function loadFaceApiModels() {
-  if (faceApiReady) return;
-  // Prevent parallel load calls
-  if (faceApiLoadPromise) return faceApiLoadPromise;
-
-  faceApiLoadPromise = (async () => {
-    if (typeof faceapi === 'undefined') {
-      throw new Error('face-api.js CDN script did not load. Check your internet connection and refresh.');
-    }
-    const MODEL_URL = '/models';
-    await Promise.all([
-      faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
-      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-    ]);
-    faceApiReady = true;
-    console.log('face-api.js models loaded ✓');
-  })();
-
-  return faceApiLoadPromise;
-}
-
-// Warm up models as soon as the page is interactive
-window.addEventListener('load', () => {
-  loadFaceApiModels().catch(err => console.warn('Model preload failed:', err.message));
-});
-
-// Calculate Eye Aspect Ratio (EAR) for blink detection
-function getEyeEAR(eyePoints) {
-  if (!eyePoints || eyePoints.length < 6) return 0.3;
-  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
-  const v1 = dist(eyePoints[1], eyePoints[5]);
-  const v2 = dist(eyePoints[2], eyePoints[4]);
-  const h = dist(eyePoints[0], eyePoints[3]);
-  if (h === 0) return 0.3;
-  return (v1 + v2) / (2.0 * h);
-}
-
-// Helper: calculate variance of number array
-function getVariance(arr) {
-  if (!arr || arr.length < 3) return 1.0;
-  const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
-  return arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length;
-}
-
-// Calculate Laplacian Pixel Texture Variance to detect flat paper/screen surfaces
-function calculateTextureVariance(videoElement, detection) {
-  if (!detection || !detection.detection) return 100;
-  const box = detection.detection.box;
-  if (!box || box.width < 40 || box.height < 40) return 100;
-
+// Register Hardware Passkey (TouchID / FaceID / Windows Hello / Android Fingerprint)
+async function setupPasskey() {
   try {
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.floor(box.width);
-    canvas.height = Math.floor(box.height);
-    const ctx = canvas.getContext('2d');
-    
-    ctx.drawImage(
-      videoElement,
-      Math.floor(box.x), Math.floor(box.y), Math.floor(box.width), Math.floor(box.height),
-      0, 0, canvas.width, canvas.height
-    );
+    setScanStatus('📍 Requesting hardware Passkey registration options…', 'info');
 
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const pixels = imgData.data;
-    let sum = 0, sqSum = 0, count = 0;
+    const optsRes = await fetch(`${API}/api/auth/webauthn/register-options`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${getToken()}` }
+    });
 
-    for (let i = 0; i < pixels.length; i += 4) {
-      const gray = 0.299 * pixels[i] + 0.587 * pixels[i+1] + 0.114 * pixels[i+2];
-      sum += gray;
-      sqSum += gray * gray;
-      count++;
-    }
-    if (count === 0) return 100;
-    const mean = sum / count;
-    return (sqSum / count) - (mean * mean);
-  } catch {
-    return 100;
-  }
-}
-
-// ── Single-Frame Passive Liveness Classifier (1:1 Raw Pixel Un-smoothed Texture/Frequency Inspection) ──
-function classifyPassiveLiveness(videoElement, detection) {
-  if (!detection || !detection.detection) return { isLive: true, score: 0.1 };
-  const box = detection.detection.box;
-  if (!box || box.width < 40 || box.height < 40) return { isLive: false, score: 0.9 };
-
-  try {
-    const w = Math.min(240, Math.floor(box.width));
-    const h = Math.min(240, Math.floor(box.height));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    
-    // CRITICAL: Disable browser bilinear interpolation smoothing to preserve 1:1 sharp Moiré & print dots
-    ctx.imageSmoothingEnabled = false;
-    ctx.webkitImageSmoothingEnabled = false;
-    ctx.mozImageSmoothingEnabled = false;
-    
-    ctx.drawImage(
-      videoElement,
-      Math.floor(box.x), Math.floor(box.y), Math.floor(box.width), Math.floor(box.height),
-      0, 0, w, h
-    );
-
-    const imgData = ctx.getImageData(0, 0, w, h);
-    const pixels = imgData.data;
-    const totalPixels = w * h;
-
-    let rSum = 0, gSum = 0, bSum = 0;
-    let rSq = 0, gSq = 0, bSq = 0;
-    let maxSpecularPixels = 0;
-
-    const grays = new Float32Array(totalPixels);
-
-    for (let i = 0; i < pixels.length; i += 4) {
-      const r = pixels[i];
-      const g = pixels[i + 1];
-      const b = pixels[i + 2];
-      const gray = 0.299 * r + 0.587 * g + 0.114 * b;
-      const idx = i / 4;
-      grays[idx] = gray;
-
-      rSum += r; gSum += g; bSum += b;
-      rSq += r * r; gSq += g * g; bSq += b * b;
-
-      // Count glass / screen specular glare spikes (unnatural brightness > 248)
-      if (r > 248 && g > 248 && b > 248) maxSpecularPixels++;
+    if (!optsRes.ok) {
+      const errData = await optsRes.json();
+      return alert('Error: ' + (errData.error || 'Failed to start Passkey setup'));
     }
 
-    // Compute spatial high-frequency Laplacian gradient on 1:1 un-smoothed pixels
-    let lapSum = 0, lapSq = 0;
-    let validCount = 0;
-    for (let y = 1; y < h - 1; y++) {
-      for (let x = 1; x < w - 1; x++) {
-        const center = grays[y * w + x];
-        const lap = Math.abs(
-          4 * center - grays[(y - 1) * w + x] - grays[(y + 1) * w + x] - grays[y * w + (x - 1)] - grays[y * w + (x + 1)]
-        );
-        lapSum += lap;
-        lapSq += lap * lap;
-        validCount++;
+    const options = await optsRes.json();
+
+    // Trigger native browser WebAuthn prompt (TouchID / FaceID / Windows Hello / Fingerprint)
+    let attResp;
+    try {
+      attResp = await SimpleWebAuthnBrowser.startRegistration(options);
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        return alert('Registration canceled or timed out.');
       }
-    }
-    const lapMean = validCount > 0 ? lapSum / validCount : 0;
-    const laplacianVar = validCount > 0 ? (lapSq / validCount) - (lapMean * lapMean) : 0;
-
-    // Color channel variance (human skin has subsurface scattering vs flat paper/screen)
-    const rVar = (rSq / totalPixels) - (rSum / totalPixels) ** 2;
-    const gVar = (gSq / totalPixels) - (gSum / totalPixels) ** 2;
-    const bVar = (bSq / totalPixels) - (bSum / totalPixels) ** 2;
-    const colorVar = (rVar + gVar + bVar) / 3.0;
-
-    const specularRatio = maxSpecularPixels / totalPixels;
-
-    // Strict Binary Classification
-    let spoofScore = 0.0;
-
-    if (laplacianVar < 22.0) spoofScore += 0.40; // Flat paper print or blurred screen photo
-    if (specularRatio > 0.015) spoofScore += 0.40; // Screen glass specular glare spike
-    if (colorVar < 250.0) spoofScore += 0.35;    // Flat paper print color distribution
-
-    return {
-      isLive: spoofScore < 0.40,
-      score: spoofScore,
-      laplacianVar,
-      colorVar
-    };
-  } catch {
-    return { isLive: true, score: 0.1 };
-  }
-}
-
-// Extract average skin RGB from nose/cheek area for Optical Light Pulse Analysis
-function extractSkinRGB(videoElement, landmarks) {
-  if (!landmarks) return null;
-  const nose = landmarks.getNose();
-  if (!nose || nose.length < 4) return null;
-
-  try {
-    const canvas = document.createElement('canvas');
-    canvas.width = 40;
-    canvas.height = 40;
-    const ctx = canvas.getContext('2d');
-    
-    const pt = nose[3];
-    const vx = Math.max(0, Math.floor(pt.x - 10));
-    const vy = Math.max(0, Math.floor(pt.y - 10));
-    
-    ctx.drawImage(videoElement, vx, vy, 20, 20, 0, 0, 40, 40);
-    const data = ctx.getImageData(0, 0, 40, 40).data;
-
-    let rSum = 0, gSum = 0, bSum = 0;
-    for (let i = 0; i < data.length; i += 4) {
-      rSum += data[i];
-      gSum += data[i + 1];
-      bSum += data[i + 2];
-    }
-    const count = data.length / 4;
-    return {
-      r: rSum / count,
-      g: gSum / count,
-      b: bSum / count
-    };
-  } catch {
-    return null;
-  }
-}
-
-// Extract 128-D descriptor, 68 landmarks, and skin RGB
-async function extractFaceDetails(videoElement) {
-  if (!faceApiReady) await loadFaceApiModels();
-  
-  const detection = await faceapi
-    .detectSingleFace(videoElement, new faceapi.SsdMobilenetv1Options({ minConfidence: 0.75 }))
-    .withFaceLandmarks()
-    .withFaceDescriptor();
-    
-  if (!detection) return null;
-
-  // Strict 68-landmark completeness check
-  const landmarks = detection.landmarks;
-  if (!landmarks || landmarks.positions.length < 68) return null;
-
-  const jaw = landmarks.getJawOutline();
-  const leftEye = landmarks.getLeftEye();
-  const rightEye = landmarks.getRightEye();
-  const nose = landmarks.getNose();
-  const mouth = landmarks.getMouth();
-
-  if (!jaw || jaw.length < 17 || !leftEye || leftEye.length < 6 || 
-      !rightEye || rightEye.length < 6 || !nose || nose.length < 4 || !mouth || mouth.length < 18) {
-    return null; // Reject partial face or half-head
-  }
-
-  const skinRGB = extractSkinRGB(videoElement, landmarks);
-  const liveness = classifyPassiveLiveness(videoElement, detection);
-
-  return {
-    descriptor: Array.from(detection.descriptor),
-    skinRGB,
-    liveness
-  };
-}
-
-// Extract Float32Array → Array descriptor
-async function extractFaceDescriptor(videoElement) {
-  const details = await extractFaceDetails(videoElement);
-  return details ? details.descriptor : null;
-}
-
-// Euclidean distance between two 128-D descriptors.
-function faceDistance(descA, descB) {
-  if (!descA || !descB || descA.length !== descB.length) return 999;
-  let sum = 0;
-  for (let i = 0; i < descA.length; i++) sum += (descA[i] - descB[i]) ** 2;
-  return Math.sqrt(sum);
-}
-
-// Strict match threshold: euclidean distance < 0.42
-const FACE_MATCH_THRESHOLD = 0.42;
-
-// ── Face Profile Enrollment Modal ───────────────────────────────────────
-function openFaceEnrollmentModal() {
-  if (isFaceLocked) {
-    alert('Facial profile is already locked.');
-    return;
-  }
-  document.getElementById('enroll-face-modal').classList.remove('hidden');
-  startEnrollCamera();
-}
-
-function closeFaceEnrollmentModal() {
-  document.getElementById('enroll-face-modal').classList.add('hidden');
-  stopCameraStream();
-}
-
-async function startEnrollCamera() {
-  const video = document.getElementById('enroll-video');
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 320, height: 240 } });
-    video.srcObject = stream;
-    activeStream = stream;
-    document.getElementById('enroll-status-text').textContent = 'Look directly into camera…';
-  } catch (err) {
-    alert('Camera access denied: ' + err.message);
-  }
-}
-
-async function captureAndSaveFaceProfile() {
-  if (isFaceLocked) return alert('Facial profile is already locked.');
-
-  const video = document.getElementById('enroll-video');
-  const statusEl = document.getElementById('enroll-modal-status');
-  const btn = document.getElementById('capture-face-btn');
-
-  if (!video || !video.videoWidth) {
-    if (statusEl) statusEl.innerHTML = '<div class="alert alert-warning mt-1">Waiting for camera stream…</div>';
-    return;
-  }
-
-  btn.disabled = true;
-  btn.textContent = 'Detecting face…';
-
-  try {
-    if (!faceApiReady) {
-      if (statusEl) statusEl.innerHTML = '<div class="alert alert-info mt-1">Loading face recognition models… please wait.</div>';
-      await loadFaceApiModels();
+      return alert('Hardware Biometrics error: ' + err.message);
     }
 
-    if (statusEl) statusEl.innerHTML = '<div class="alert alert-info mt-1">📸 Analysing your face — look directly at camera…</div>';
-    const faceDescriptor = await extractFaceDescriptor(video);
-
-    if (!faceDescriptor) {
-      if (statusEl) statusEl.innerHTML = '<div class="alert alert-warning mt-1">⚠️ No clear face detected. Center your full face squarely in the camera frame.</div>';
-      return;
-    }
-
-    const res = await fetch(`${API}/api/auth/face-profile`, {
+    // Verify registration response on server
+    const verifyRes = await fetch(`${API}/api/auth/webauthn/register-verify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${getToken()}`
       },
-      body: JSON.stringify({ faceDescriptor })
+      body: JSON.stringify(attResp)
     });
 
-    if (res.ok) {
-      userFaceProfile = faceDescriptor;
-      isFaceLocked = true;
-      if (statusEl) statusEl.innerHTML = '<div class="alert alert-success mt-1">✓ Facial profile registered and locked!</div>';
-      setTimeout(() => {
-        closeFaceEnrollmentModal();
-        checkFaceProfileStatus();
-      }, 1200);
+    const verifyData = await verifyRes.json();
+
+    if (verifyRes.ok && verifyData.verified) {
+      alert('✓ Hardware Passkey (TouchID / FaceID) registered successfully!');
+      checkFaceProfileStatus();
     } else {
-      const data = await res.json();
-      if (statusEl) statusEl.innerHTML = `<div class="alert alert-error mt-1">${data.error || 'Failed to save profile'}</div>`;
+      alert('Passkey verification failed: ' + (verifyData.error || 'Unknown error'));
     }
   } catch (err) {
-    console.error('Face enrollment error:', err);
-    if (statusEl) statusEl.innerHTML = `<div class="alert alert-error mt-1">❌ Error: ${err.message || err}. Open DevTools console (F12) for details.</div>`;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '📸 Capture & Lock Profile';
+    console.error('setupPasskey error:', err);
+    alert('Passkey setup error: ' + err.message);
   }
 }
 
-let faceFacingMode = 'user';
-let qrFacingMode = 'environment';
+// Hardware Biometrics Scan Workflow: Verify Passkey -> Open QR Scanner Camera
+async function startBiometricScanWorkflow() {
+  if (!isPasskeyRegistered) {
+    alert('Please register your Hardware Passkey (Touch ID / Fingerprint) first before marking attendance.');
+    return;
+  }
 
-async function flipFaceCamera() {
-  faceFacingMode = faceFacingMode === 'user' ? 'environment' : 'user';
-  await stopCameraStream();
-  startBiometricScanWorkflow();
+  setScanStatus('🔐 Please scan Touch ID / Fingerprint / Face ID on your device…', 'info');
+
+  try {
+    // 1. Fetch authentication challenge options
+    const authOptsRes = await fetch(`${API}/api/auth/webauthn/authenticate-options`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${getToken()}` }
+    });
+
+    if (!authOptsRes.ok) {
+      const errData = await authOptsRes.json();
+      return setScanStatus(errData.error || 'Failed to initialize Passkey verification', 'error');
+    }
+
+    const authOptions = await authOptsRes.json();
+
+    // 2. Trigger native OS WebAuthn biometric prompt (Touch ID / Face ID / Windows Hello)
+    let asseResp;
+    try {
+      asseResp = await SimpleWebAuthnBrowser.startAuthentication(authOptions);
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        return setScanStatus('Authentication canceled. Please tap Touch ID / Fingerprint to proceed.', 'error');
+      }
+      return setScanStatus('Biometric error: ' + err.message, 'error');
+    }
+
+    // 3. Verify hardware signature on server
+    const verifyRes = await fetch(`${API}/api/auth/webauthn/authenticate-verify`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getToken()}`
+      },
+      body: JSON.stringify(asseResp)
+    });
+
+    const verifyData = await verifyRes.json();
+
+    if (verifyRes.ok && verifyData.verified) {
+      setScanStatus('✓ Hardware Biometrics Verified! Opening QR scanner camera…', 'success');
+      document.getElementById('scan-prompt').classList.add('hidden');
+      await openQRScannerCamera();
+    } else {
+      setScanStatus('Passkey verification failed: ' + (verifyData.error || 'Signature invalid'), 'error');
+    }
+  } catch (err) {
+    console.error('startBiometricScanWorkflow error:', err);
+    setScanStatus('Biometric verification error: ' + err.message, 'error');
+  }
 }
+
+let qrFacingMode = 'environment';
 
 async function flipQRCamera() {
   qrFacingMode = qrFacingMode === 'user' ? 'environment' : 'user';
   await openQRScannerCamera();
-}
-
-async function flipEnrollCamera() {
-  faceFacingMode = faceFacingMode === 'user' ? 'environment' : 'user';
-  await stopCameraStream();
-  startEnrollCamera();
-}
-
-// ── STEP 1: Face-First Scan Workflow (Instant 128-D Biometric Identity Lock) ──
-async function startBiometricScanWorkflow() {
-  if (!userFaceProfile) {
-    alert('Please register your Facial Profile first before marking attendance.');
-    return;
-  }
-
-  await stopCameraStream();
-  await new Promise(r => setTimeout(r, 100));
-
-  document.getElementById('scan-prompt').classList.add('hidden');
-  const faceView = document.getElementById('face-verification-view');
-  faceView.classList.remove('hidden');
-  document.getElementById('qr-reader-container').classList.add('hidden');
-
-  const promptEl = document.getElementById('liveness-prompt');
-  const subtextEl = document.getElementById('liveness-subtext');
-
-  promptEl.textContent = '👤 Look directly at camera…';
-  promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Analyzing neural 128-D facial identity…';
-
-  const video = document.getElementById('face-video');
-  try {
-    // Strictly enforce Front Selfie Camera ('user') with 1080p High-Resolution Capture
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 } } });
-    video.srcObject = stream;
-    activeStream = stream;
-  } catch (err) {
-    setScanStatus('Camera error: ' + err.message, 'error');
-    cleanupVerificationView();
-    return;
-  }
-
-  let startTime = Date.now();
-  let verificationAttempts = 0;
-  let matchConfirmations = 0;
-
-  async function checkFrame() {
-    if (!activeStream) return;
-
-    if (Date.now() - startTime > 12000) {
-      subtextEl.textContent = '⚠️ Timed out. Face not recognized or profile mismatch.';
-      setScanStatus('Biometric rejected — face identity verification failed.', 'error');
-      cleanupVerificationView();
-      document.getElementById('scan-prompt').classList.remove('hidden');
-      isProcessing = false;
-      return;
-    }
-
-    if (video.videoWidth > 0) {
-      try {
-        const details = await extractFaceDetails(video);
-
-        if (!details) {
-          promptEl.textContent = '👤 Center full face in camera frame…';
-          promptEl.style.color = '#fbbf24';
-          matchConfirmations = 0;
-        } else {
-          const { descriptor } = details;
-          const dist = faceDistance(userFaceProfile, descriptor);
-
-          if (dist >= FACE_MATCH_THRESHOLD) {
-            matchConfirmations = 0;
-            verificationAttempts++;
-            if (verificationAttempts >= 10) {
-              promptEl.textContent = '❌ Face Not Recognised!';
-              promptEl.style.color = '#f87171';
-              subtextEl.textContent = 'Face does not match registered student profile.';
-              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
-              cleanupVerificationView();
-              document.getElementById('scan-prompt').classList.remove('hidden');
-              isProcessing = false;
-              return;
-            } else {
-              promptEl.textContent = `⚠️ Face mismatch (attempt ${verificationAttempts}/10) — hold still…`;
-              promptEl.style.color = '#fbbf24';
-            }
-          } else {
-            // Identity Matched (< 0.42) — Capture 1080p High-Res Frame for DeepFace RetinaFace + LBP + FFT
-            const w = video.videoWidth || 1920;
-            const h = video.videoHeight || 1080;
-            const snapCanvas = document.createElement('canvas');
-            snapCanvas.width = w;
-            snapCanvas.height = h;
-            const snapCtx = snapCanvas.getContext('2d');
-            snapCtx.drawImage(video, 0, 0, w, h);
-            const faceImage = snapCanvas.toDataURL('image/jpeg', 0.90);
-
-            try {
-              const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${getToken()}`
-                },
-                body: JSON.stringify({ faceImage, faceDescriptor: descriptor })
-              });
-
-              if (!sRes.ok) {
-                const sErr = await sRes.json();
-                promptEl.textContent = '⚠️ Spoof Photo / Screen Detected';
-                promptEl.style.color = '#f87171';
-                subtextEl.textContent = sErr.error || 'DeepFace Anti-Spoofing: Photo or screen display detected.';
-                matchConfirmations = 0;
-              } else {
-                matchConfirmations++;
-                if (matchConfirmations >= 2) {
-                  promptEl.textContent = '✓ DeepFace & Identity Verified!';
-                  promptEl.style.color = '#4ade80';
-                  subtextEl.textContent = 'DeepFace anti-spoofing & identity confirmed. Opening QR scanner…';
-                  setTimeout(async () => {
-                    cleanupVerificationView();
-                    await openQRScannerCamera();
-                  }, 300);
-                  return;
-                } else {
-                  promptEl.textContent = '👤 Running DeepFace liveness check…';
-                  promptEl.style.color = '#fbbf24';
-                }
-              }
-            } catch {
-              // Network fallback
-              matchConfirmations++;
-              if (matchConfirmations >= 2) {
-                promptEl.textContent = '✓ Biometric Identity Verified!';
-                promptEl.style.color = '#4ade80';
-                setTimeout(async () => {
-                  cleanupVerificationView();
-                  await openQRScannerCamera();
-                }, 300);
-                return;
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('face-api detection error:', e);
-      }
-    }
-
-    await new Promise(r => setTimeout(r, 120));
-    livenessLoopId = requestAnimationFrame(checkFrame);
-  }
-
-  livenessLoopId = requestAnimationFrame(checkFrame);
 }
 
 // ── STEP 2: Open Camera QR Scanner (Triggered ONLY after Face Match) ───
@@ -1016,13 +620,9 @@ async function loadAnalytics() {
 }
 
 // Global Exports
-window.openFaceEnrollmentModal = openFaceEnrollmentModal;
-window.closeFaceEnrollmentModal = closeFaceEnrollmentModal;
-window.captureAndSaveFaceProfile = captureAndSaveFaceProfile;
+window.setupPasskey = setupPasskey;
 window.startBiometricScanWorkflow = startBiometricScanWorkflow;
-window.flipFaceCamera = flipFaceCamera;
 window.flipQRCamera = flipQRCamera;
-window.flipEnrollCamera = flipEnrollCamera;
 window.resetScanner = resetScanner;
 window.submitManualToken = submitManualToken;
 window.loadAnalytics = loadAnalytics;
@@ -1034,14 +634,9 @@ window.logout = logout;
 
 // ── Bind Event Listeners ────────────────────────────────────────────────
 function bindStudentEventListeners() {
-  document.getElementById('setup-face-btn')?.addEventListener('click', openFaceEnrollmentModal);
-  document.getElementById('btn-close-enroll-face-modal')?.addEventListener('click', closeFaceEnrollmentModal);
-  document.getElementById('btn-cancel-enroll-face-modal')?.addEventListener('click', closeFaceEnrollmentModal);
-  document.getElementById('capture-face-btn')?.addEventListener('click', captureAndSaveFaceProfile);
+  document.getElementById('setup-passkey-btn')?.addEventListener('click', setupPasskey);
   document.getElementById('btn-start-biometric-scan')?.addEventListener('click', startBiometricScanWorkflow);
-  document.getElementById('btn-flip-face-camera')?.addEventListener('click', flipFaceCamera);
   document.getElementById('btn-flip-qr-camera')?.addEventListener('click', flipQRCamera);
-  document.getElementById('btn-flip-enroll-camera')?.addEventListener('click', flipEnrollCamera);
   document.getElementById('btn-reset-scanner')?.addEventListener('click', resetScanner);
   document.getElementById('btn-submit-manual-token')?.addEventListener('click', submitManualToken);
   document.getElementById('btn-refresh-analytics')?.addEventListener('click', loadAnalytics);

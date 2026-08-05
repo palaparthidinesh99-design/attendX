@@ -6,7 +6,6 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "nodemon server/server.js",
-    "postinstall": "pip3 install --no-cache-dir -r requirements.txt || pip install --no-cache-dir -r requirements.txt || true",
     "test": "npm run test:unit && npm run test:api",
     "test:unit": "node server/utils/token.test.js && node server/utils/geofence.test.js",
     "test:api": "NODE_ENV=test node server/tests/api.test.js"
@@ -23,6 +22,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@simplewebauthn/server": "^13.3.2",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.0.3",

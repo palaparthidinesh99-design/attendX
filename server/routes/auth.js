@@ -3,6 +3,12 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
 const { authenticate, requireRole } = require('../middleware/auth');
+const {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse
+} = require('@simplewebauthn/server');
 
 const router = express.Router();
 
@@ -13,6 +19,17 @@ function signToken(user) {
     { expiresIn: '7d' }
   );
 }
+
+const getRPID = (req) => {
+  const host = req.get('host') || 'localhost';
+  return host.split(':')[0];
+};
+
+const getOrigin = (req) => {
+  const protocol = req.protocol || 'http';
+  const host = req.get('host') || 'localhost:3000';
+  return `${protocol}://${host}`;
+};
 
 // POST /api/auth/register
 router.post('/register', async (req, res, next) => {
@@ -95,111 +112,155 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
-// POST /api/auth/face-profile (Student facial profile registration)
-router.post('/face-profile', authenticate, requireRole('student'), async (req, res, next) => {
+// GET /api/auth/webauthn-status — Check if student has registered a Passkey
+router.get('/webauthn-status', authenticate, requireRole('student'), async (req, res, next) => {
   try {
-    const { faceDescriptor } = req.body;
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const isRegistered = Array.isArray(user.webauthnDevices) && user.webauthnDevices.length > 0;
+    res.json({ isRegistered, deviceCount: user.webauthnDevices ? user.webauthnDevices.length : 0 });
+  } catch (err) {
+    next(err);
+  }
+});
 
-    if (!Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
-      return res.status(400).json({ error: 'Valid 128-element face descriptor array is required' });
-    }
-
+// POST /api/auth/webauthn/register-options — Generate Registration Challenge
+router.post('/webauthn/register-options', authenticate, requireRole('student'), async (req, res, next) => {
+  try {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    // Only lock if a valid 128-D profile already exists
-    if (user.faceProfileLocked && Array.isArray(user.faceDescriptor) && user.faceDescriptor.length === 128) {
-      return res.status(403).json({ error: 'Facial profile is locked and cannot be changed' });
-    }
+    const rpID = getRPID(req);
+    const options = await generateRegistrationOptions({
+      rpName: 'AttendX Proxy System',
+      rpID,
+      userID: new TextEncoder().encode(user._id.toString()),
+      userName: user.email,
+      userDisplayName: user.name,
+      authenticatorSelection: {
+        userVerification: 'preferred',
+        residentKey: 'discouraged'
+      },
+      attestationType: 'none',
+      excludeCredentials: (user.webauthnDevices || []).map(dev => ({
+        id: dev.credentialID,
+        transports: dev.transports
+      }))
+    });
 
-    user.faceDescriptor = faceDescriptor;
-    user.faceProfileLocked = true;
+    user.currentChallenge = options.challenge;
     await user.save();
 
-    res.json({ success: true, message: 'Facial profile registered and locked successfully' });
+    res.json(options);
   } catch (err) {
     next(err);
   }
 });
 
-// GET /api/auth/face-profile
-router.get('/face-profile', authenticate, requireRole('student'), async (req, res, next) => {
+// POST /api/auth/webauthn/register-verify — Verify Registration Response
+router.post('/webauthn/register-verify', authenticate, requireRole('student'), async (req, res, next) => {
   try {
-    const user = await User.findById(req.user._id).select('faceDescriptor faceProfileLocked');
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
-    res.json({
-      hasFaceProfile: Array.isArray(user.faceDescriptor) && user.faceDescriptor.length === 128,
-      faceProfileLocked: !!user.faceProfileLocked,
-      faceDescriptor: user.faceDescriptor
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-const { execFile } = require('child_process');
-const path = require('path');
-
-// POST /api/auth/verify-liveness (DeepFace Anti-Spoofing & 128-D Neural Identity Classifier)
-router.post('/verify-liveness', authenticate, requireRole('student'), async (req, res, next) => {
-  try {
-    const { faceImage, faceDescriptor } = req.body;
-
-    if (!Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
-      return res.status(400).json({ error: 'Valid 128-element face descriptor is required' });
-    }
-
+    const { body } = req;
     const user = await User.findById(req.user._id);
-    if (!user || !Array.isArray(user.faceDescriptor) || user.faceDescriptor.length !== 128) {
-      return res.status(403).json({ error: 'Student facial profile is not registered' });
+    if (!user || !user.currentChallenge) {
+      return res.status(400).json({ error: 'Registration challenge expired or missing' });
     }
 
-    // 1. Verify 128-D Neural Facial Descriptor Match (< 0.42)
-    let sum = 0;
-    for (let i = 0; i < 128; i++) {
-      sum += (user.faceDescriptor[i] - faceDescriptor[i]) ** 2;
-    }
-    const dist = Math.sqrt(sum);
+    const rpID = getRPID(req);
+    const origin = getOrigin(req);
 
-    if (dist >= 0.42) {
-      return res.status(403).json({ isLive: false, error: 'Facial identity mismatch — face does not match registered student profile' });
-    }
-
-    // 2. Python DeepFace Anti-Spoofing Classification
-    if (faceImage && typeof faceImage === 'string') {
-      const scriptPath = path.join(__dirname, '../../scripts/deepface_liveness.py');
-      
-      const runPython = (cmd) => new Promise((resolve) => {
-        execFile(cmd, [scriptPath, faceImage], { timeout: 8000, maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
-          if (err || !stdout) return resolve(null);
-          try {
-            resolve(JSON.parse(stdout.trim()));
-          } catch (_) {
-            resolve(null);
-          }
-        });
-      });
-
-      let deepfaceResult = await runPython('python3');
-      if (!deepfaceResult) {
-        deepfaceResult = await runPython('python');
-      }
-
-      if (deepfaceResult && deepfaceResult.isLive === false) {
-        return res.status(403).json({
-          isLive: false,
-          error: `DeepFace Anti-Spoofing Rejected: ${deepfaceResult.error || 'Spoof photo or screen display detected'}`
-        });
-      }
-    }
-
-    res.json({
-      isLive: true,
-      confidence: 0.98,
-      method: 'DeepFace + 128D Neural Embedding',
-      message: 'DeepFace anti-spoofing and identity verified successfully'
+    const verification = await verifyRegistrationResponse({
+      response: body,
+      expectedChallenge: user.currentChallenge,
+      expectedOrigin: origin,
+      expectedRPID: rpID
     });
+
+    if (verification.verified && verification.registrationInfo) {
+      const { credential } = verification.registrationInfo;
+      user.webauthnDevices = user.webauthnDevices || [];
+      user.webauthnDevices.push({
+        credentialID: credential.id,
+        publicKey: Buffer.from(credential.publicKey).toString('base64url'),
+        counter: credential.counter,
+        transports: body.response.transports || ['internal']
+      });
+      user.currentChallenge = null;
+      await user.save();
+
+      return res.json({ verified: true, message: 'Hardware Passkey (TouchID / FaceID) registered successfully!' });
+    }
+
+    res.status(400).json({ verified: false, error: 'Passkey registration verification failed' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/webauthn/authenticate-options — Generate Authentication Challenge
+router.post('/webauthn/authenticate-options', authenticate, requireRole('student'), async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user._id);
+    if (!user || !user.webauthnDevices || user.webauthnDevices.length === 0) {
+      return res.status(403).json({ error: 'No registered Passkey found. Please register hardware TouchID/FaceID first.' });
+    }
+
+    const rpID = getRPID(req);
+    const options = await generateAuthenticationOptions({
+      rpID,
+      userVerification: 'preferred',
+      allowCredentials: user.webauthnDevices.map(dev => ({
+        id: dev.credentialID,
+        transports: dev.transports
+      }))
+    });
+
+    user.currentChallenge = options.challenge;
+    await user.save();
+
+    res.json(options);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/auth/webauthn/authenticate-verify — Verify Hardware Signature
+router.post('/webauthn/authenticate-verify', authenticate, requireRole('student'), async (req, res, next) => {
+  try {
+    const { body } = req;
+    const user = await User.findById(req.user._id);
+    if (!user || !user.currentChallenge) {
+      return res.status(400).json({ error: 'Authentication challenge expired or missing' });
+    }
+
+    const dev = (user.webauthnDevices || []).find(d => d.credentialID === body.id);
+    if (!dev) {
+      return res.status(400).json({ error: 'Passkey device credential not registered for this account' });
+    }
+
+    const rpID = getRPID(req);
+    const origin = getOrigin(req);
+
+    const verification = await verifyAuthenticationResponse({
+      response: body,
+      expectedChallenge: user.currentChallenge,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
+      credential: {
+        id: dev.credentialID,
+        publicKey: Buffer.from(dev.publicKey, 'base64url'),
+        counter: dev.counter
+      }
+    });
+
+    if (verification.verified) {
+      dev.counter = verification.authenticationInfo.newCounter;
+      user.currentChallenge = null;
+      await user.save();
+      return res.json({ verified: true, message: 'Hardware Passkey (TouchID / FaceID) verified successfully' });
+    }
+
+    res.status(403).json({ verified: false, error: 'Hardware biometric authentication failed' });
   } catch (err) {
     next(err);
   }

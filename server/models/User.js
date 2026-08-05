@@ -29,15 +29,16 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  // Facial recognition 512-dimensional LBP+gradient descriptor
-  faceDescriptor: {
-    type: [Number],
-    default: undefined
-  },
-  // Facial profile lock flag — student can only register face ONCE
-  faceProfileLocked: {
-    type: Boolean,
-    default: false
+  // WebAuthn Hardware Passkeys (TouchID / FaceID / Windows Hello / Android Biometrics)
+  webauthnDevices: [{
+    credentialID: { type: String, required: true },
+    publicKey: { type: String, required: true },
+    counter: { type: Number, default: 0 },
+    transports: [String]
+  }],
+  currentChallenge: {
+    type: String,
+    default: null
   },
   createdAt: {
     type: Date,
