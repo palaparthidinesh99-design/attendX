@@ -140,31 +140,10 @@ let biometricVerifiedAt = null;
 let verificationTimerInterval = null;
 let isBiometricVerified = false;
 
-function getBiometricType() {
-  return localStorage.getItem('attendx_biometric_type') || 'fingerprint';
-}
-
-function setBiometricType(type) {
-  localStorage.setItem('attendx_biometric_type', type);
-  updateBiometricUI();
-}
-
-function updateBiometricUI() {
-  const select = document.getElementById('biometric-type-select');
-  const btn = document.getElementById('btn-start-biometric-scan');
-  const subtext = document.getElementById('scan-prompt-subtext');
-  const type = getBiometricType();
-
-  if (select) select.value = type;
-
-  if (type === 'face') {
-    if (btn) btn.innerHTML = '👤 Verify Face ID &amp; Scan QR';
-    if (subtext) subtext.textContent = 'Verify hardware Face ID / System Biometrics, then scan QR code';
-  } else {
-    if (btn) btn.innerHTML = '☝️ Verify Touch ID &amp; Scan QR';
-    if (subtext) subtext.textContent = 'Verify hardware Touch ID / Fingerprint, then scan QR code';
-  }
-}
+// ── 30-Second Biometric Verification Expiry Timer State ──────────
+let biometricVerifiedAt = null;
+let verificationTimerInterval = null;
+let isBiometricVerified = false;
 
 function stopVerificationTimer() {
   if (verificationTimerInterval) clearInterval(verificationTimerInterval);
@@ -205,20 +184,19 @@ function start30SecVerificationTimer() {
       document.getElementById('scan-prompt')?.classList.remove('hidden');
       document.getElementById('qr-reader-container')?.classList.add('hidden');
 
-      setScanStatus('⏱️ 30-second biometric verification window expired. Please tap Verify Biometrics to scan again.', 'warning');
+      setScanStatus('⏱️ 30-second biometric verification window expired. Please tap Verify Touch ID to scan again.', 'warning');
     }
   }, 100);
 }
 
-// Hardware Biometrics Scan Workflow: Verify Passkey -> Open QR Scanner Camera
+// Hardware Biometrics Scan Workflow: Verify Touch ID -> Open QR Scanner Camera
 async function startBiometricScanWorkflow() {
   if (!isPasskeyRegistered) {
-    alert('Please register your Hardware Passkey (Touch ID / Face ID / Fingerprint) first before marking attendance.');
+    alert('Please register your Hardware Touch ID / Fingerprint Passkey first before marking attendance.');
     return;
   }
 
-  const bioTypeLabel = getBiometricType() === 'face' ? 'Face ID' : 'Touch ID / Fingerprint';
-  setScanStatus(`🔐 Please scan ${bioTypeLabel} on your device…`, 'info');
+  setScanStatus('☝️ Please scan Touch ID / Fingerprint on your device…', 'info');
 
   try {
     // 1. Fetch authentication challenge options
@@ -229,20 +207,20 @@ async function startBiometricScanWorkflow() {
 
     if (!authOptsRes.ok) {
       const errData = await authOptsRes.json();
-      return setScanStatus(errData.error || 'Failed to initialize Passkey verification', 'error');
+      return setScanStatus(errData.error || 'Failed to initialize Touch ID verification', 'error');
     }
 
     const authOptions = await authOptsRes.json();
 
-    // 2. Trigger native OS WebAuthn biometric prompt (Touch ID / Face ID / Windows Hello)
+    // 2. Trigger native OS WebAuthn Touch ID / Fingerprint prompt
     let asseResp;
     try {
       asseResp = await SimpleWebAuthnBrowser.startAuthentication(authOptions);
     } catch (err) {
       if (err.name === 'NotAllowedError') {
-        return setScanStatus(`Authentication canceled. Please tap ${bioTypeLabel} to proceed.`, 'error');
+        return setScanStatus('Authentication canceled. Please tap Touch ID / Fingerprint to proceed.', 'error');
       }
-      return setScanStatus('Biometric error: ' + err.message, 'error');
+      return setScanStatus('Touch ID error: ' + err.message, 'error');
     }
 
     // 3. Verify hardware signature on server
@@ -258,16 +236,16 @@ async function startBiometricScanWorkflow() {
     const verifyData = await verifyRes.json();
 
     if (verifyRes.ok && verifyData.verified) {
-      setScanStatus(`✓ ${bioTypeLabel} Verified! Opening QR scanner camera (30s window active)…`, 'success');
+      setScanStatus('✓ Touch ID Verified! Opening QR scanner camera (30s window active)…', 'success');
       document.getElementById('scan-prompt').classList.add('hidden');
       start30SecVerificationTimer();
       await openQRScannerCamera();
     } else {
-      setScanStatus('Passkey verification failed: ' + (verifyData.error || 'Signature invalid'), 'error');
+      setScanStatus('Touch ID verification failed: ' + (verifyData.error || 'Signature invalid'), 'error');
     }
   } catch (err) {
     console.error('startBiometricScanWorkflow error:', err);
-    setScanStatus('Biometric verification error: ' + err.message, 'error');
+    setScanStatus('Touch ID verification error: ' + err.message, 'error');
   }
 }
 
@@ -716,7 +694,6 @@ window.logout = logout;
 function bindStudentEventListeners() {
   document.getElementById('setup-passkey-btn')?.addEventListener('click', setupPasskey);
   document.getElementById('btn-start-biometric-scan')?.addEventListener('click', startBiometricScanWorkflow);
-  document.getElementById('biometric-type-select')?.addEventListener('change', (e) => setBiometricType(e.target.value));
   document.getElementById('btn-flip-qr-camera')?.addEventListener('click', flipQRCamera);
   document.getElementById('btn-reset-scanner')?.addEventListener('click', resetScanner);
   document.getElementById('btn-submit-manual-token')?.addEventListener('click', submitManualToken);
@@ -727,7 +704,6 @@ function bindStudentEventListeners() {
 // ── Init & Real-Time Sync Polling ──────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   bindStudentEventListeners();
-  updateBiometricUI();
   checkFaceProfileStatus();
   loadAnalytics();
 
@@ -736,7 +712,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 if (document.readyState !== 'loading') {
   bindStudentEventListeners();
-  updateBiometricUI();
   checkFaceProfileStatus();
   loadAnalytics();
 }
