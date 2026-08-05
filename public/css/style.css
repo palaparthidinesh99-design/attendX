@@ -575,24 +575,70 @@ small { font-size: 0.8rem; color: var(--text-muted); }
 .cal-dot.red   { background: var(--accent-danger); box-shadow: 0 0 8px rgba(239, 68, 68, 0.6); }
 .cal-dot.blue  { background: var(--accent-info); box-shadow: 0 0 8px rgba(59, 130, 246, 0.6); }
 
-/* ── Compact Calendar & Side Panel Container ───────────────────────────── */
-.calendar-layout-container {
-  display: grid;
-  grid-template-columns: 1fr 310px;
-  gap: 1rem;
-  align-items: start;
+/* ── Mobile Responsive Scaling & Overflow Containment ───────────────────── */
+html, body {
+  overflow-x: hidden !important;
+  width: 100% !important;
+  max-width: 100vw !important;
 }
 
-@media (max-width: 900px) {
-  .calendar-layout-container { grid-template-columns: 1fr; }
-}
+@media (max-width: 640px) {
+  .container {
+    padding: 0 0.75rem !important;
+  }
 
-.calendar-side-panel {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 1.1rem;
-  min-height: 250px;
+  .navbar {
+    padding: 0.75rem 1rem !important;
+  }
+
+  .navbar-brand {
+    font-size: 1.1rem !important;
+  }
+
+  .user-pill {
+    padding: 0.25rem 0.55rem !important;
+    font-size: 0.78rem !important;
+  }
+
+  .card {
+    padding: 1rem !important;
+  }
+
+  .calendar-layout-container {
+    grid-template-columns: 1fr !important;
+  }
+
+  .calendar-month-widget {
+    padding: 0.85rem !important;
+  }
+
+  .cal-day-cell {
+    min-height: 38px !important;
+    padding: 0.25rem !important;
+  }
+
+  .cal-day-num {
+    font-size: 0.75rem !important;
+  }
+
+  .cal-dot {
+    width: 5px !important;
+    height: 5px !important;
+  }
+
+  .calendar-side-panel {
+    padding: 0.85rem !important;
+    min-height: auto !important;
+  }
+
+  #qr-reader {
+    max-width: 100% !important;
+  }
+
+  .table-responsive {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 

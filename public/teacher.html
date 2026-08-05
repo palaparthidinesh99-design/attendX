@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>AttendX — Teacher Dashboard</title>
   <meta name="description" content="Teacher dashboard — Course management, start session, rotating QR, live attendance, and CSV export." />
   <link rel="stylesheet" href="/css/style.css" />
@@ -10,7 +10,7 @@
   <style>
     .courses-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
       gap: 1.25rem;
       margin-top: 1rem;
     }
@@ -31,13 +31,13 @@
 
     .teacher-session-layout {
       display: grid;
-      grid-template-columns: 380px 1fr;
-      gap: 1.5rem;
+      grid-template-columns: 1fr;
+      gap: 1.25rem;
       align-items: start;
     }
 
-    @media (max-width: 850px) {
-      .teacher-session-layout { grid-template-columns: 1fr; }
+    @media (min-width: 960px) {
+      .teacher-session-layout { grid-template-columns: 360px 1fr; }
     }
 
     .qr-section { display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 1rem 0; }
