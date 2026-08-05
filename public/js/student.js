@@ -449,7 +449,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (Optical Skin Light Pulse Synchronization) ──
+// ── STEP 1: Face-First Scan Workflow (Instant 128-D Biometric Identity Lock) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -466,11 +466,10 @@ async function startBiometricScanWorkflow() {
 
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
-  const flashEl = document.getElementById('light-pulse-flash');
 
-  promptEl.textContent = '👤 Center face in camera frame…';
+  promptEl.textContent = '👤 Look directly at camera…';
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Optical Skin Reflection: Flashing screen light pulses (no action needed)…';
+  subtextEl.textContent = 'Analyzing neural 128-D facial identity…';
 
   const video = document.getElementById('face-video');
   try {
@@ -486,129 +485,34 @@ async function startBiometricScanWorkflow() {
 
   let startTime = Date.now();
   let verificationAttempts = 0;
-  let pulsePhase = 0; // 0 = Idle, 1 = Baseline, 2 = Red Flash, 3 = Blue Flash, 4 = Evaluate
-  let ambientRGB = null;
-  let redFlashRGB = null;
-  let blueFlashRGB = null;
-
-  async function triggerLightPulseSequence(details) {
-    if (pulsePhase !== 0) return;
-    pulsePhase = 1;
-
-    promptEl.textContent = '⚡ Measuring optical skin reflection…';
-    promptEl.style.color = '#fbbf24';
-    ambientRGB = details.skinRGB;
-
-    // Flash 1: Red Light Pulse (#ff0055)
-    await new Promise(r => setTimeout(r, 150));
-    pulsePhase = 2;
-    if (flashEl) {
-      flashEl.style.background = '#ff0055';
-      flashEl.style.opacity = '0.85';
-    }
-
-    await new Promise(r => setTimeout(r, 220));
-    const detRed = await extractFaceDetails(video);
-    redFlashRGB = detRed ? detRed.skinRGB : null;
-
-    // Flash 2: Blue Light Pulse (#00e5ff)
-    pulsePhase = 3;
-    if (flashEl) {
-      flashEl.style.background = '#00e5ff';
-      flashEl.style.opacity = '0.85';
-    }
-
-    await new Promise(r => setTimeout(r, 220));
-    const detBlue = await extractFaceDetails(video);
-    blueFlashRGB = detBlue ? detBlue.skinRGB : null;
-
-    // Turn off screen flash overlay
-    if (flashEl) {
-      flashEl.style.opacity = '0';
-    }
-    pulsePhase = 4;
-
-    // CRITICAL SECURITY FIX: Face MUST remain continuously detected in frame during light pulses!
-    if (!detRed || !detBlue || !redFlashRGB || !blueFlashRGB) {
-      promptEl.textContent = '⚠️ Face Moved / Disappeared';
-      promptEl.style.color = '#f87171';
-      subtextEl.textContent = 'Keep your face centered continuously in front of the camera during verification.';
-      pulsePhase = 0; // reset
-      return;
-    }
-
-    // Evaluate Optical Skin Subsurface Scattering Deltas
-    let deltaRed = Math.abs(redFlashRGB.r - ambientRGB.r);
-    let deltaBlue = Math.abs(blueFlashRGB.b - ambientRGB.b);
-    let deltaGreen = Math.abs(redFlashRGB.g - ambientRGB.g);
-    let totalOpticalDelta = deltaRed + deltaBlue + deltaGreen;
-
-    // Calibrated sensitivity: total optical RGB delta >= 3.0 or any single channel >= 1.8
-    if (totalOpticalDelta < 3.0 && deltaRed < 1.8 && deltaBlue < 1.8) {
-      promptEl.textContent = '⚠️ Reflection Verification Failed';
-      promptEl.style.color = '#fbbf24';
-      subtextEl.textContent = 'Increase screen brightness or hold device slightly closer to your face.';
-      pulsePhase = 0; // reset to allow instant retry
-      return;
-    }
-
-    // REAL HUMAN SKIN REFLECTION VERIFIED!
-    try {
-      const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${getToken()}`
-        },
-        body: JSON.stringify({ faceDescriptor: details.descriptor })
-      });
-
-      if (sRes.ok) {
-        promptEl.textContent = '✓ Live Skin Reflection & Face Verified!';
-        promptEl.style.color = '#4ade80';
-        subtextEl.textContent = 'Optical skin reflection & identity confirmed. Opening QR scanner…';
-        setTimeout(async () => {
-          cleanupVerificationView();
-          await openQRScannerCamera();
-        }, 300);
-        return;
-      }
-    } catch {
-      promptEl.textContent = '✓ Live Skin & Face Verified!';
-      promptEl.style.color = '#4ade80';
-      setTimeout(async () => {
-        cleanupVerificationView();
-        await openQRScannerCamera();
-      }, 300);
-      return;
-    }
-  }
+  let matchConfirmations = 0;
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 15000) {
-      if (flashEl) flashEl.style.opacity = '0';
-      subtextEl.textContent = '⚠️ Timed out. Photo/Screen detected or face not recognized.';
-      setScanStatus('Biometric rejected — optical skin reflection failed or identity mismatch.', 'error');
+    if (Date.now() - startTime > 12000) {
+      subtextEl.textContent = '⚠️ Timed out. Face not recognized or profile mismatch.';
+      setScanStatus('Biometric rejected — face identity verification failed.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
       return;
     }
 
-    if (video.videoWidth > 0 && pulsePhase === 0) {
+    if (video.videoWidth > 0) {
       try {
         const details = await extractFaceDetails(video);
 
         if (!details) {
           promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
+          matchConfirmations = 0;
         } else {
           const { descriptor } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
           if (dist >= FACE_MATCH_THRESHOLD) {
+            matchConfirmations = 0;
             verificationAttempts++;
             if (verificationAttempts >= 10) {
               promptEl.textContent = '❌ Face Not Recognised!';
@@ -624,8 +528,21 @@ async function startBiometricScanWorkflow() {
               promptEl.style.color = '#fbbf24';
             }
           } else {
-            // Identity matched -> Trigger Optical Light Pulse Sequence
-            triggerLightPulseSequence(details);
+            // Identity Matched (< 0.42)
+            matchConfirmations++;
+            if (matchConfirmations >= 2) {
+              promptEl.textContent = '✓ Biometric Identity Verified!';
+              promptEl.style.color = '#4ade80';
+              subtextEl.textContent = 'Student identity confirmed. Opening QR scanner…';
+              setTimeout(async () => {
+                cleanupVerificationView();
+                await openQRScannerCamera();
+              }, 300);
+              return;
+            } else {
+              promptEl.textContent = '👤 Verifying identity…';
+              promptEl.style.color = '#fbbf24';
+            }
           }
         }
       } catch (e) {
@@ -695,10 +612,19 @@ async function onQRDecoded(decodedText) {
       await submitAttendance(payload.sessionId, payload.token, pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
     },
     (err) => {
-      setScanStatus('Location error: ' + err.message, 'error');
-      isProcessing = false;
+      // Retry once with extended timeout for fresh hardware GPS fix
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          await submitAttendance(payload.sessionId, payload.token, pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
+        },
+        (err2) => {
+          setScanStatus('Location error: ' + err2.message, 'error');
+          isProcessing = false;
+        },
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+      );
     },
-    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
   );
 }
 

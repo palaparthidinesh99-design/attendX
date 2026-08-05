@@ -59,8 +59,9 @@ router.post('/scan', authenticate, requireRole('student'), async (req, res, next
       session.location.lat, session.location.lng
     );
 
-    const deviceAccuracy = (accuracyMeters != null && !isNaN(parseFloat(accuracyMeters))) ? parseFloat(accuracyMeters) : 25;
-    const accuracyBuffer = Math.min(Math.max(deviceAccuracy, 15), 50); // Tight 15m-50m buffer for GPS precision
+    const deviceAccuracy = (accuracyMeters != null && !isNaN(parseFloat(accuracyMeters))) ? parseFloat(accuracyMeters) : 15;
+    // Strict 10m - 50m maximum GPS accuracy buffer
+    const accuracyBuffer = Math.min(Math.max(deviceAccuracy, 10), 50);
     const allowedRadius = session.radiusMeters + accuracyBuffer;
 
     if (distanceMeters > allowedRadius) {

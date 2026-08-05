@@ -276,24 +276,18 @@ function useCurrentLocation() {
   navigator.geolocation.getCurrentPosition(
     (pos) => setLocationSuccess(pos, btn, latInput, lngInput),
     (err) => {
+      // Retry once with extended timeout and maximumAge: 0 to force fresh high-accuracy position
       navigator.geolocation.getCurrentPosition(
         (pos) => setLocationSuccess(pos, btn, latInput, lngInput),
-        async () => {
-          const ok = await tryIpGeolocation(latInput, lngInput);
-          if (ok) {
-            btn.disabled = false;
-            btn.textContent = '✓ Location set (IP)';
-            setStatus('create-status', '📍 Location set via Wi-Fi/IP. System includes a 200m buffer for laptop vs mobile GPS variance.', 'info');
-          } else {
-            setStatus('create-status', 'Location permission denied. Click "Fill Demo Coords" to test.', 'warning');
-            btn.disabled = false;
-            btn.textContent = '📍 Get Location';
-          }
+        () => {
+          setStatus('create-status', '📍 Location error: Unable to obtain precise GPS. Please check browser location permissions.', 'warning');
+          btn.disabled = false;
+          btn.textContent = '📍 Get Location';
         },
-        { enableHighAccuracy: false, timeout: 8000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
       );
     },
-    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
   );
 }
 
@@ -303,22 +297,8 @@ function setLocationSuccess(pos, btn, latInput, lngInput) {
   btn.disabled = false;
   btn.textContent = '✓ Location set!';
   const accStr = pos.coords.accuracy ? ` (±${Math.round(pos.coords.accuracy)}m accuracy)` : '';
-  setStatus('create-status', `📍 Location set (${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)})${accStr}. 200m buffer active for laptop/phone variance.`, 'success');
+  setStatus('create-status', `📍 Location set (${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)})${accStr}.`, 'success');
   setTimeout(() => { btn.textContent = '📍 Get Location'; }, 3000);
-}
-
-async function tryIpGeolocation(latInput, lngInput) {
-  try {
-    const res = await fetch('https://ipapi.co/json/', { timeout: 3000 });
-    if (!res.ok) return false;
-    const data = await res.json();
-    if (data.latitude && data.longitude) {
-      latInput.value = parseFloat(data.latitude).toFixed(6);
-      lngInput.value = parseFloat(data.longitude).toFixed(6);
-      return true;
-    }
-  } catch (_) {}
-  return false;
 }
 
 function fillDemoLocation() {
