@@ -160,7 +160,7 @@ function calculateTextureVariance(videoElement, detection) {
   }
 }
 
-// Extract 128-D descriptor, 68 landmarks, and 3D Head Yaw Ratio
+// Extract 128-D descriptor, 68 landmarks, yawRatio, avgEAR, and mar for 2-step sequence
 async function extractFaceDetails(videoElement) {
   if (!faceApiReady) await loadFaceApiModels();
   
@@ -186,13 +186,26 @@ async function extractFaceDetails(videoElement) {
     return null; // Reject partial face or half-head
   }
 
-  // Calculate 3D Head Yaw Ratio (0.50 = front, >0.56 = right, <0.44 = left)
+  // 1. Head Yaw Ratio (0.50 = front, >0.54 = right, <0.46 = left)
   const jawWidth = jaw[16].x - jaw[0].x;
   const yawRatio = jawWidth > 0 ? (nose[3].x - jaw[0].x) / jawWidth : 0.50;
 
+  // 2. Eye Aspect Ratio (EAR) for eye blink
+  const dist = (p1, p2) => Math.hypot(p1.x - p2.x, p1.y - p2.y);
+  const leftEAR = (dist(leftEye[1], leftEye[5]) + dist(leftEye[2], leftEye[4])) / (2 * dist(leftEye[0], leftEye[3]));
+  const rightEAR = (dist(rightEye[1], rightEye[5]) + dist(rightEye[2], rightEye[4])) / (2 * dist(rightEye[0], rightEye[3]));
+  const avgEAR = (leftEAR + rightEAR) / 2.0;
+
+  // 3. Mouth Aspect Ratio (MAR) for smile/open
+  const mouthVert = dist(mouth[13], mouth[17]);
+  const mouthHoriz = dist(mouth[0], mouth[6]);
+  const mar = mouthHoriz > 0 ? mouthVert / mouthHoriz : 0.10;
+
   return {
     descriptor: Array.from(detection.descriptor),
-    yawRatio
+    yawRatio,
+    avgEAR,
+    mar
   };
 }
 
@@ -319,7 +332,7 @@ async function flipEnrollCamera() {
   startEnrollCamera();
 }
 
-// ── STEP 1: Face-First Scan Workflow (2-Stage 3D Head Rotation Liveness Challenge) ──
+// ── STEP 1: Face-First Scan Workflow (Randomized 2-Action Sequence Pipeline) ──
 async function startBiometricScanWorkflow() {
   if (!userFaceProfile) {
     alert('Please register your Facial Profile first before marking attendance.');
@@ -337,16 +350,22 @@ async function startBiometricScanWorkflow() {
   const promptEl = document.getElementById('liveness-prompt');
   const subtextEl = document.getElementById('liveness-subtext');
 
-  // Randomize direction challenge at runtime
-  const directions = [
-    { code: 'RIGHT', label: '➡️ Turn head slightly RIGHT', targetMin: 0.56, targetMax: 1.0 },
-    { code: 'LEFT',  label: '⬅️ Turn head slightly LEFT',  targetMin: 0.00, targetMax: 0.44 }
+  // Available action pool for 2-step random sequence
+  const pool = [
+    { code: 'RIGHT', label: '➡️ Turn head RIGHT' },
+    { code: 'LEFT',  label: '⬅️ Turn head LEFT' },
+    { code: 'BLINK', label: '👁️ Blink eyes once' },
+    { code: 'SMILE', label: '😊 Smile at camera' }
   ];
-  const activeDirection = directions[Math.floor(Math.random() * directions.length)];
 
-  promptEl.textContent = '👤 Look straight at camera…';
+  // Pick 2 distinct random actions fresh at runtime
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const action1 = shuffled[0];
+  const action2 = shuffled[1];
+
+  promptEl.textContent = `1/2: ${action1.label}`;
   promptEl.style.color = '#fbbf24';
-  subtextEl.textContent = 'Step 1/2: Calibrating front facial identity…';
+  subtextEl.textContent = `Step 1 of 2: Perform ${action1.label}…`;
 
   const video = document.getElementById('face-video');
   try {
@@ -360,15 +379,28 @@ async function startBiometricScanWorkflow() {
   }
 
   let startTime = Date.now();
-  let stage = 1; // Stage 1 = Front Identity, Stage 2 = 3D Rotation
+  let step = 1; // Step 1 -> Step 2 -> Complete
+  let blinkClosed = false;
   let verificationAttempts = 0;
+
+  function evaluateAction(actionCode, details) {
+    const { yawRatio, avgEAR, mar } = details;
+    if (actionCode === 'RIGHT') return yawRatio > 0.54;
+    if (actionCode === 'LEFT')  return yawRatio < 0.46;
+    if (actionCode === 'SMILE') return mar > 0.22;
+    if (actionCode === 'BLINK') {
+      if (avgEAR < 0.24) blinkClosed = true;
+      return blinkClosed && avgEAR >= 0.25;
+    }
+    return false;
+  }
 
   async function checkFrame() {
     if (!activeStream) return;
 
-    if (Date.now() - startTime > 20000) {
-      subtextEl.textContent = '⚠️ Timed out. Photo detected or 3D turn not performed.';
-      setScanStatus('Biometric rejected — static photo detected or 3D turn challenge failed.', 'error');
+    if (Date.now() - startTime > 22000) {
+      subtextEl.textContent = '⚠️ Timed out. Photo/Video detected or sequence incomplete.';
+      setScanStatus('Biometric rejected — static photo/video detected or 2-step sequence failed.', 'error');
       cleanupVerificationView();
       document.getElementById('scan-prompt').classList.remove('hidden');
       isProcessing = false;
@@ -383,48 +415,48 @@ async function startBiometricScanWorkflow() {
           promptEl.textContent = '👤 Center full face in camera frame…';
           promptEl.style.color = '#fbbf24';
         } else {
-          const { descriptor, yawRatio } = details;
+          const { descriptor } = details;
           const dist = faceDistance(userFaceProfile, descriptor);
 
-          if (stage === 1) {
-            // Stage 1: Verify Front-Facing Identity Match
-            if (dist < FACE_MATCH_THRESHOLD && yawRatio >= 0.45 && yawRatio <= 0.55) {
-              stage = 2;
-              promptEl.textContent = activeDirection.label;
-              promptEl.style.color = '#fbbf24';
-              subtextEl.textContent = `Step 2/2: Perform ${activeDirection.label} to prove 3D presence…`;
-            } else if (dist >= FACE_MATCH_THRESHOLD) {
-              verificationAttempts++;
-              if (verificationAttempts >= 10) {
-                promptEl.textContent = '❌ Face Not Recognised!';
-                promptEl.style.color = '#f87171';
-                subtextEl.textContent = 'Face does not match registered student profile.';
-                setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
-                cleanupVerificationView();
-                document.getElementById('scan-prompt').classList.remove('hidden');
-                isProcessing = false;
-                return;
+          if (dist >= FACE_MATCH_THRESHOLD && dist >= 0.48) {
+            verificationAttempts++;
+            if (verificationAttempts >= 12) {
+              promptEl.textContent = '❌ Face Not Recognised!';
+              promptEl.style.color = '#f87171';
+              subtextEl.textContent = 'Face does not match registered student profile.';
+              setScanStatus('Biometric rejected — face does not match registered profile.', 'error');
+              cleanupVerificationView();
+              document.getElementById('scan-prompt').classList.remove('hidden');
+              isProcessing = false;
+              return;
+            }
+          } else {
+            // Evaluate Step 1 vs Step 2
+            if (step === 1) {
+              if (evaluateAction(action1.code, details)) {
+                step = 2;
+                blinkClosed = false; // reset blink state for step 2
+                promptEl.textContent = `2/2: ${action2.label}`;
+                promptEl.style.color = '#fbbf24';
+                subtextEl.textContent = `Step 2 of 2: Now perform ${action2.label}…`;
               } else {
-                promptEl.textContent = '👤 Look straight at camera…';
+                promptEl.textContent = `1/2: ${action1.label}`;
                 promptEl.style.color = '#fbbf24';
               }
-            }
-          } else if (stage === 2) {
-            // Stage 2: Verify 3D Head Rotation while maintaining face identity match (< 0.48)
-            const isTurnExecuted = yawRatio >= activeDirection.targetMin && yawRatio <= activeDirection.targetMax;
-
-            if (isTurnExecuted && dist < 0.48) {
-              promptEl.textContent = '✓ 3D Live Face Verified!';
-              promptEl.style.color = '#4ade80';
-              subtextEl.textContent = '3D liveness & identity confirmed. Opening QR scanner…';
-              setTimeout(async () => {
-                cleanupVerificationView();
-                await openQRScannerCamera();
-              }, 300);
-              return;
-            } else {
-              promptEl.textContent = activeDirection.label;
-              promptEl.style.color = '#fbbf24';
+            } else if (step === 2) {
+              if (evaluateAction(action2.code, details)) {
+                promptEl.textContent = '✓ 2-Step Live Face Verified!';
+                promptEl.style.color = '#4ade80';
+                subtextEl.textContent = 'Randomized liveness sequence & identity confirmed. Opening QR scanner…';
+                setTimeout(async () => {
+                  cleanupVerificationView();
+                  await openQRScannerCamera();
+                }, 300);
+                return;
+              } else {
+                promptEl.textContent = `2/2: ${action2.label}`;
+                promptEl.style.color = '#fbbf24';
+              }
             }
           }
         }
