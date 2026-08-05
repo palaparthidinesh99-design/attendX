@@ -473,8 +473,8 @@ async function startBiometricScanWorkflow() {
 
   const video = document.getElementById('face-video');
   try {
-    // Strictly enforce Front Selfie Camera ('user')
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: 320, height: 240 } });
+    // Strictly enforce Front Selfie Camera ('user') with 1080p High-Resolution Capture
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1920 }, height: { ideal: 1080 } } });
     video.srcObject = stream;
     activeStream = stream;
   } catch (err) {
@@ -528,13 +528,15 @@ async function startBiometricScanWorkflow() {
               promptEl.style.color = '#fbbf24';
             }
           } else {
-            // Identity Matched (< 0.42) — Now Run DeepFace Anti-Spoofing Verification
+            // Identity Matched (< 0.42) — Capture 1080p High-Res Frame for DeepFace RetinaFace + LBP + FFT
+            const w = video.videoWidth || 1920;
+            const h = video.videoHeight || 1080;
             const snapCanvas = document.createElement('canvas');
-            snapCanvas.width = 320;
-            snapCanvas.height = 240;
+            snapCanvas.width = w;
+            snapCanvas.height = h;
             const snapCtx = snapCanvas.getContext('2d');
-            snapCtx.drawImage(video, 0, 0, 320, 240);
-            const faceImage = snapCanvas.toDataURL('image/jpeg', 0.85);
+            snapCtx.drawImage(video, 0, 0, w, h);
+            const faceImage = snapCanvas.toDataURL('image/jpeg', 0.90);
 
             try {
               const sRes = await fetch(`${API}/api/auth/verify-liveness`, {
