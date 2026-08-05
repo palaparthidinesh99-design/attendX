@@ -160,34 +160,40 @@ function calculateTextureVariance(videoElement, detection) {
   }
 }
 
-// ── Single-Frame Passive Liveness Classifier (Texture, Moiré Grid, Specular Reflection Analysis) ──
+// ── Single-Frame Passive Liveness Classifier (1:1 Raw Pixel Un-smoothed Texture/Frequency Inspection) ──
 function classifyPassiveLiveness(videoElement, detection) {
   if (!detection || !detection.detection) return { isLive: true, score: 0.1 };
   const box = detection.detection.box;
   if (!box || box.width < 40 || box.height < 40) return { isLive: false, score: 0.9 };
 
   try {
+    const w = Math.min(240, Math.floor(box.width));
+    const h = Math.min(240, Math.floor(box.height));
+
     const canvas = document.createElement('canvas');
-    canvas.width = 120;
-    canvas.height = 120;
+    canvas.width = w;
+    canvas.height = h;
     const ctx = canvas.getContext('2d');
+    
+    // CRITICAL: Disable browser bilinear interpolation smoothing to preserve 1:1 sharp Moiré & print dots
+    ctx.imageSmoothingEnabled = false;
+    ctx.webkitImageSmoothingEnabled = false;
+    ctx.mozImageSmoothingEnabled = false;
     
     ctx.drawImage(
       videoElement,
       Math.floor(box.x), Math.floor(box.y), Math.floor(box.width), Math.floor(box.height),
-      0, 0, 120, 120
+      0, 0, w, h
     );
 
-    const imgData = ctx.getImageData(0, 0, 120, 120);
+    const imgData = ctx.getImageData(0, 0, w, h);
     const pixels = imgData.data;
-    const totalPixels = 120 * 120;
+    const totalPixels = w * h;
 
     let rSum = 0, gSum = 0, bSum = 0;
     let rSq = 0, gSq = 0, bSq = 0;
-    let highFreqEnergy = 0;
     let maxSpecularPixels = 0;
 
-    // Convert to grayscale & analyze frequency/color artifacts
     const grays = new Float32Array(totalPixels);
 
     for (let i = 0; i < pixels.length; i += 4) {
@@ -201,25 +207,26 @@ function classifyPassiveLiveness(videoElement, detection) {
       rSum += r; gSum += g; bSum += b;
       rSq += r * r; gSq += g * g; bSq += b * b;
 
-      // Count glass / screen specular glare spikes (unnatural brightness > 250)
-      if (r > 250 && g > 250 && b > 250) maxSpecularPixels++;
+      // Count glass / screen specular glare spikes (unnatural brightness > 248)
+      if (r > 248 && g > 248 && b > 248) maxSpecularPixels++;
     }
 
-    // Compute spatial high-frequency Laplacian gradient (detect Moiré subpixel grids & paper halftone dots)
-    let laplacianVar = 0;
+    // Compute spatial high-frequency Laplacian gradient on 1:1 un-smoothed pixels
     let lapSum = 0, lapSq = 0;
-    for (let y = 1; y < 119; y++) {
-      for (let x = 1; x < 119; x++) {
-        const center = grays[y * 120 + x];
+    let validCount = 0;
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const center = grays[y * w + x];
         const lap = Math.abs(
-          4 * center - grays[(y - 1) * 120 + x] - grays[(y + 1) * 120 + x] - grays[y * 120 + (x - 1)] - grays[y * 120 + (x + 1)]
+          4 * center - grays[(y - 1) * w + x] - grays[(y + 1) * w + x] - grays[y * w + (x - 1)] - grays[y * w + (x + 1)]
         );
         lapSum += lap;
         lapSq += lap * lap;
+        validCount++;
       }
     }
-    const lapMean = lapSum / (118 * 118);
-    laplacianVar = (lapSq / (118 * 118)) - (lapMean * lapMean);
+    const lapMean = validCount > 0 ? lapSum / validCount : 0;
+    const laplacianVar = validCount > 0 ? (lapSq / validCount) - (lapMean * lapMean) : 0;
 
     // Color channel variance (human skin has subsurface scattering vs flat paper/screen)
     const rVar = (rSq / totalPixels) - (rSum / totalPixels) ** 2;
@@ -227,19 +234,17 @@ function classifyPassiveLiveness(videoElement, detection) {
     const bVar = (bSq / totalPixels) - (bSum / totalPixels) ** 2;
     const colorVar = (rVar + gVar + bVar) / 3.0;
 
-    // Specular glare ratio
     const specularRatio = maxSpecularPixels / totalPixels;
 
-    // Binary classifier decision logic
-    // Screen / Paper photo artifacts: unnaturally low Laplacian variance OR excessive specular glare OR flat color histogram
+    // Strict Binary Classification
     let spoofScore = 0.0;
 
-    if (laplacianVar < 15.0) spoofScore += 0.45; // Flat surface / blur artifact
-    if (specularRatio > 0.03) spoofScore += 0.40; // Screen glass glare spike
-    if (colorVar < 180.0) spoofScore += 0.35;    // Flat paper print color distribution
+    if (laplacianVar < 22.0) spoofScore += 0.40; // Flat paper print or blurred screen photo
+    if (specularRatio > 0.015) spoofScore += 0.40; // Screen glass specular glare spike
+    if (colorVar < 250.0) spoofScore += 0.35;    // Flat paper print color distribution
 
     return {
-      isLive: spoofScore < 0.45,
+      isLive: spoofScore < 0.40,
       score: spoofScore,
       laplacianVar,
       colorVar
