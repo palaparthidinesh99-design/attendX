@@ -87,8 +87,17 @@
               </div>
               <span id="passkey-status-badge" class="badge badge-red">Not Registered</span>
             </div>
+
+            <div class="form-group mb-1">
+              <label class="form-label" style="font-size:0.78rem;">Preferred Biometric Type:</label>
+              <select class="form-input" id="biometric-type-select" style="font-size:0.8rem;padding:0.35rem 0.5rem;">
+                <option value="fingerprint">☝️ Fingerprint / Touch ID</option>
+                <option value="face">👤 Face ID / System Biometrics</option>
+              </select>
+            </div>
+
             <button type="button" class="btn btn-primary btn-sm btn-full" id="setup-passkey-btn">
-              🔐 Register Touch ID / Passkey
+              🔐 Register Passkey (Touch ID / Face ID)
             </button>
           </div>
 
@@ -97,10 +106,20 @@
             <div class="scanner-section">
               <div id="scan-prompt" style="text-align:center;">
                 <h2>Mark Attendance</h2>
-                <p style="font-size:0.82rem;margin-top:0.2rem;">Verify hardware fingerprint / TouchID, then scan QR code</p>
+                <p style="font-size:0.82rem;margin-top:0.2rem;" id="scan-prompt-subtext">Verify hardware biometrics, then scan QR code</p>
                 <button type="button" class="btn btn-primary btn-lg mt-2" id="btn-start-biometric-scan">
-                  🔐 Verify Touch ID &amp; Scan QR
+                  🔐 Verify Biometrics &amp; Scan QR
                 </button>
+              </div>
+
+              <!-- 30-Second Verification Expiry Timer Bar -->
+              <div id="verification-timer-container" class="hidden" style="width:100%;max-width:340px;background:rgba(16,185,129,0.1);border:1px solid var(--accent-success);border-radius:var(--radius-sm);padding:0.6rem;text-align:center;">
+                <div style="font-size:0.82rem;font-weight:600;color:var(--accent-success);" id="verification-timer-text">
+                  ⏱️ Biometrics Verified! Scan QR within <span id="timer-seconds">30</span>s
+                </div>
+                <div class="progress-bar-bg" style="margin-top:0.4rem;height:5px;">
+                  <div class="progress-bar-fill" id="verification-progress-bar" style="width:100%;background:var(--accent-success);"></div>
+                </div>
               </div>
 
               <!-- QR Reader Camera View (Step 2) -->
