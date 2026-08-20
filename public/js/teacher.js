@@ -165,9 +165,44 @@ async function openCourseWorkspace(courseId) {
           </div>
         `).join('');
       }
-    }
+    fetchCourseStudents(courseId);
+    loadPastSessionsForCourse(courseId);
   } catch (err) {
     console.error('Fetch course students error:', err);
+  }
+}
+
+async function loadPastSessionsForCourse(courseId) {
+  const container = document.getElementById('past-sessions-container');
+  if (!container) return;
+
+  try {
+    const res = await fetch(`${API}/api/sessions`, { headers: authHeaders() });
+    if (!res.ok) return;
+    const sessions = await res.json();
+    const courseSessions = sessions.filter(s => String(s.courseId?._id || s.courseId) === String(courseId));
+
+    if (!courseSessions.length) {
+      container.innerHTML = `<div class="empty-state"><p>No past sessions recorded for this course yet</p></div>`;
+      return;
+    }
+
+    container.innerHTML = courseSessions.map(s => `
+      <div style="font-size:0.85rem;background:var(--bg-secondary);padding:0.6rem 0.8rem;border-radius:var(--radius-sm);border:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:0.5rem;flex-wrap:wrap;">
+        <div>
+          <strong style="color:var(--text-main);">${s.className}</strong>
+          <span style="font-size:0.78rem;color:var(--text-muted);display:block;">
+            📅 ${new Date(s.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })} &nbsp;|&nbsp; 
+            Status: ${s.active ? '🟢 LIVE' : '🔴 CLOSED'}
+          </span>
+        </div>
+        <a href="${API}/api/courses/sessions/${s._id}/export" target="_blank" class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:0.25rem 0.5rem;">
+          📥 Download CSV
+        </a>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('Past sessions error:', err);
   }
 }
 

@@ -35,7 +35,9 @@ async function authenticate(req, res, next) {
  */
 function requireRole(role) {
   return (req, res, next) => {
-    if (req.user.role !== role) {
+    const userRole = String(req.user.role || '').toLowerCase();
+    const targetRole = String(role || '').toLowerCase();
+    if (userRole !== targetRole) {
       return res.status(403).json({ error: `Access restricted to ${role}s` });
     }
     next();

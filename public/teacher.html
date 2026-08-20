@@ -205,7 +205,7 @@
             </div>
 
             <!-- Live Attendance Roster Card -->
-            <div class="card">
+            <div class="card mb-2">
               <div class="section-header" style="flex-wrap:wrap;gap:0.75rem;">
                 <div>
                   <h2>Live Session Check-ins</h2>
@@ -231,6 +231,20 @@
                 <div class="empty-state">
                   <p>Waiting for students to scan in…</p>
                 </div>
+              </div>
+            </div>
+
+            <!-- Historical Session Ledgers Card -->
+            <div class="card">
+              <div class="section-header" style="flex-wrap:wrap;gap:0.75rem;">
+                <div>
+                  <h2>Historical Sessions &amp; Attendance Records</h2>
+                  <p style="font-size:0.8rem;">Select a past session to view full roster and export records</p>
+                </div>
+              </div>
+
+              <div id="past-sessions-container" style="display:flex;flex-direction:column;gap:0.6rem;margin-top:0.5rem;max-height:220px;overflow-y:auto;">
+                <div class="empty-state"><p>No past sessions recorded yet</p></div>
               </div>
             </div>
           </div>
