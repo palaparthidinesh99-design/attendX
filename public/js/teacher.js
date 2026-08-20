@@ -1,6 +1,8 @@
 /* teacher.js — course-first workflow, session control, rotating QR, live attendance, CSV export */
 
-const API = '';
+const API = (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
+  ? 'https://attendx-qnqb.onrender.com'
+  : '';
 
 function getToken() { return localStorage.getItem('attendx_token'); }
 function getUser()  { return JSON.parse(localStorage.getItem('attendx_user') || 'null'); }
