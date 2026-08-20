@@ -1,5 +1,9 @@
 const express = require('express');
+const crypto = require('crypto');
 const Course = require('../models/Course');
+const Enrollment = require('../models/Enrollment');
+const Session = require('../models/Session');
+const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const { authenticate, requireRole } = require('../middleware/auth');
 
@@ -22,10 +26,13 @@ router.post('/', authenticate, requireRole('teacher'), async (req, res, next) =>
       return res.status(409).json({ error: `Course with code ${cleanCode} already exists` });
     }
 
+    const joinCode = crypto.randomBytes(3).toString('hex').toUpperCase();
+
     const course = await Course.create({
       teacherId: req.user._id,
       courseCode: cleanCode,
-      courseName: cleanName
+      courseName: cleanName,
+      joinCode
     });
 
     res.status(201).json(course);
@@ -34,43 +41,43 @@ router.post('/', authenticate, requireRole('teacher'), async (req, res, next) =>
   }
 });
 
-// GET /api/courses — List courses (Teacher's created courses or Student's enrolled courses)
+// GET /api/courses — List teacher's created courses or student's enrolled courses
 router.get('/', authenticate, async (req, res, next) => {
   try {
-    let courses;
     if (req.user.role === 'teacher') {
-      courses = await Course.find({ teacherId: req.user._id })
-        .populate('enrolledStudents', 'name email rollNumber')
-        .sort({ createdAt: -1 });
-    } else {
-      // Student: find courses where student is enrolled by ObjectId or email
-      courses = await Course.find({
-        $or: [
-          { enrolledStudents: req.user._id },
-          { enrolledEmails: req.user.email.toLowerCase() }
-        ]
-      }).populate('teacherId', 'name email').sort({ createdAt: -1 });
-    }
+      const courses = await Course.find({ teacherId: req.user._id }).sort({ createdAt: -1 }).lean();
+      
+      const coursesWithStats = await Promise.all(courses.map(async (c) => {
+        const activeEnrolledCount = await Enrollment.countDocuments({ courseId: c._id, status: 'ACTIVE' });
+        return { ...c, enrolledCount: activeEnrolledCount };
+      }));
 
-    res.json(courses);
+      return res.json(coursesWithStats);
+    } else {
+      // Student: Query Enrollment join collection
+      const enrollments = await Enrollment.find({ studentId: req.user._id, status: 'ACTIVE' })
+        .populate({
+          path: 'courseId',
+          populate: { path: 'teacherId', select: 'name email' }
+        })
+        .sort({ createdAt: -1 });
+
+      const courses = enrollments.map(e => e.courseId).filter(Boolean);
+      res.json(courses);
+    }
   } catch (err) {
     next(err);
   }
 });
 
-// POST /api/courses/:id/enroll — Add student email(s) to a course
+// POST /api/courses/:id/enroll — Teacher enrolls student email(s) into course
 router.post('/:id/enroll', authenticate, requireRole('teacher'), async (req, res, next) => {
   try {
-    const { emails } = req.body; // Can be a string "a@b.com, c@d.com" or an array
-
-    if (!emails) {
-      return res.status(400).json({ error: 'Student email(s) are required' });
-    }
+    const { emails } = req.body;
+    if (!emails) return res.status(400).json({ error: 'Student email(s) required' });
 
     const course = await Course.findOne({ _id: req.params.id, teacherId: req.user._id });
-    if (!course) {
-      return res.status(404).json({ error: 'Course not found or unauthorized' });
-    }
+    if (!course) return res.status(404).json({ error: 'Course not found or unauthorized' });
 
     let emailList = [];
     if (Array.isArray(emails)) {
@@ -83,114 +90,72 @@ router.post('/:id/enroll', authenticate, requireRole('teacher'), async (req, res
       return res.status(400).json({ error: 'No valid emails provided' });
     }
 
-    // Find registered student users matching these emails
-    const matchingUsers = await User.find({ email: { $in: emailList }, role: 'student' });
-    const matchingUserIds = matchingUsers.map(u => u._id.toString());
+    const students = await User.find({ email: { $in: emailList }, role: 'student' });
+    let enrolledCount = 0;
 
-    // Merge enrolledEmails and enrolledStudents without duplicates
-    const existingEmails = new Set(course.enrolledEmails || []);
-    emailList.forEach(e => existingEmails.add(e));
-    course.enrolledEmails = Array.from(existingEmails);
+    for (let student of students) {
+      await Enrollment.updateOne(
+        { studentId: student._id, courseId: course._id },
+        { $set: { status: 'ACTIVE' } },
+        { upsert: true }
+      );
+      enrolledCount++;
+    }
 
-    const existingStudentIds = new Set((course.enrolledStudents || []).map(id => id.toString()));
-    matchingUserIds.forEach(id => existingStudentIds.add(id));
-    course.enrolledStudents = Array.from(existingStudentIds);
-
-    await course.save();
-
-    const updated = await Course.findById(course._id).populate('enrolledStudents', 'name email rollNumber');
-    res.json({
-      message: `Enrolled ${emailList.length} student email(s) successfully`,
-      course: updated
-    });
+    res.json({ message: `Successfully enrolled ${enrolledCount} student(s)` });
   } catch (err) {
     next(err);
   }
 });
 
-// GET /api/courses/:id/students — Get course roster
-router.get('/:id/students', authenticate, async (req, res, next) => {
+// POST /api/courses/join — Student joins course by Join Code
+router.post('/join', authenticate, requireRole('student'), async (req, res, next) => {
   try {
-    const course = await Course.findById(req.params.id).populate('enrolledStudents', 'name email rollNumber');
-    if (!course) return res.status(404).json({ error: 'Course not found' });
+    const { joinCode } = req.body;
+    if (!joinCode) return res.status(400).json({ error: 'joinCode required' });
 
-    res.json({
-      courseCode: course.courseCode,
-      courseName: course.courseName,
-      enrolledCount: course.enrolledEmails.length,
-      registeredCount: course.enrolledStudents.length,
-      enrolledEmails: course.enrolledEmails,
-      students: course.enrolledStudents
-    });
+    const cleanCode = joinCode.trim().toUpperCase();
+    const course = await Course.findOne({ joinCode: cleanCode });
+    if (!course) return res.status(404).json({ error: 'Invalid join code' });
+
+    await Enrollment.updateOne(
+      { studentId: req.user._id, courseId: course._id },
+      { $set: { status: 'ACTIVE' } },
+      { upsert: true }
+    );
+
+    res.json({ message: `Successfully joined ${course.courseCode} (${course.courseName})`, course });
   } catch (err) {
     next(err);
   }
 });
 
-// GET /api/courses/:id/export-csv — Download course attendance CSV anytime
-router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, res, next) => {
+// GET /api/courses/sessions/:sessionId/export — Scale-aware Streaming CSV Export
+router.get('/sessions/:sessionId/export', authenticate, requireRole('teacher'), async (req, res, next) => {
   try {
-    const course = await Course.findOne({ _id: req.params.id, teacherId: req.user._id });
-    if (!course) return res.status(404).json({ error: 'Course not found or unauthorized' });
+    const session = await Session.findById(req.params.sessionId).populate('courseId');
+    if (!session) return res.status(404).json({ error: 'Session not found' });
 
-    const Session = require('../models/Session');
-    const Attendance = require('../models/Attendance');
-
-    // Find latest session for this course
-    const latestSession = await Session.findOne({ courseId: course._id }).sort({ startTime: -1 });
-
-    const formatISTDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' }) : '-';
-    const formatISTTime = (d) => d ? `${new Date(d).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour12: true })} IST` : '-';
-
-    const filename = `Attendance_${course.courseCode}_${formatISTDate(new Date()).replace(/\//g, '-')}.csv`;
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', `attachment; filename=attendance_${session.courseId.courseCode}_${session.dateString}.csv`);
+    res.write('Roll Number,Student Name,Status,Time (IST),Distance (m),Review Reasons,Generated By\n');
 
-    let csvContent = `"Course Code","Course Name","Date (IST)","Roll Number","Student Name","Student Email","Status","Timestamp (IST)","Distance (m)"\n`;
+    // Mongoose Cursor streams documents without buffering in RAM
+    const cursor = Attendance.find({ sessionId: session._id })
+      .populate('studentId', 'name rollNumber email')
+      .cursor();
 
-    if (!latestSession) {
-      // Export enrolled roster if no sessions held yet
-      for (let emailStr of (course.enrolledEmails || [])) {
-        const studentUser = await User.findOne({ email: emailStr.toLowerCase() });
-        const roll = studentUser?.rollNumber ? `"${studentUser.rollNumber.replace(/"/g, '""')}"` : '"-"';
-        const name = studentUser?.name ? `"${studentUser.name.replace(/"/g, '""')}"` : '"Enrolled Student"';
-        csvContent += `"${course.courseCode}","${course.courseName.replace(/"/g, '""')}","${formatISTDate(new Date())}",${roll},${name},"${emailStr}","ENROLLED","-","-"\n`;
-      }
-      return res.status(200).send(csvContent);
+    for await (const row of cursor) {
+      const roll = row.studentId?.rollNumber ? `"${row.studentId.rollNumber.replace(/"/g, '""')}"` : '"N/A"';
+      const name = row.studentId?.name ? `"${row.studentId.name.replace(/"/g, '""')}"` : '"Student"';
+      const time = row.timeString || 'N/A';
+      const dist = row.distanceMeters != null ? `${row.distanceMeters}m` : 'N/A';
+      const reasons = (row.reviewReasons || []).join('|') || 'NONE';
+
+      res.write(`${roll},${name},${row.status},"${time}","${dist}","${reasons}",${row.generatedBy}\n`);
     }
 
-    // Export latest session attendance
-    const records = await Attendance.find({ sessionId: latestSession._id })
-      .populate('studentId', 'name email rollNumber')
-      .sort({ timestamp: 1 });
-
-    const attendedEmailMap = new Map();
-    records.forEach(r => {
-      if (r.studentId && r.studentId.email) {
-        attendedEmailMap.set(r.studentId.email.toLowerCase(), r);
-      }
-    });
-
-    for (let r of records) {
-      const s = r.studentId || {};
-      const roll = s.rollNumber ? `"${s.rollNumber.replace(/"/g, '""')}"` : '"-"';
-      const name = s.name ? `"${s.name.replace(/"/g, '""')}"` : '"Unknown"';
-      const email = s.email ? `"${s.email.replace(/"/g, '""')}"` : '"-"';
-      const time = `"${formatISTTime(r.timestamp)}"`;
-      const dist = r.distanceMeters != null ? `"${r.distanceMeters}m"` : '"-"';
-      csvContent += `"${course.courseCode}","${latestSession.className.replace(/"/g, '""')}","${formatISTDate(latestSession.startTime)}",${roll},${name},${email},"PRESENT",${time},${dist}\n`;
-    }
-
-    for (let emailStr of (course.enrolledEmails || [])) {
-      if (!attendedEmailMap.has(emailStr.toLowerCase())) {
-        const studentUser = await User.findOne({ email: emailStr.toLowerCase() });
-        const roll = studentUser?.rollNumber ? `"${studentUser.rollNumber.replace(/"/g, '""')}"` : '"-"';
-        const name = studentUser?.name ? `"${studentUser.name.replace(/"/g, '""')}"` : '"Enrolled Student"';
-        csvContent += `"${course.courseCode}","${latestSession.className.replace(/"/g, '""')}","${formatISTDate(latestSession.startTime)}",${roll},${name},"${emailStr}","ABSENT","-","-"\n`;
-      }
-    }
-
-    res.status(200).send(csvContent);
+    res.end();
   } catch (err) {
     next(err);
   }

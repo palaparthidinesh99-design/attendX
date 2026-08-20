@@ -17,22 +17,27 @@ const courseSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  // List of enrolled student user IDs
+  joinCode: {
+    type: String,
+    unique: true,
+    sparse: true
+  },
+  totalSessionsHeld: {
+    type: Number,
+    default: 0
+  },
+  // List of enrolled student user IDs (backwards compatible)
   enrolledStudents: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
-  // Enrolled student emails (to allow enrolling before student registers)
+  // Enrolled student emails (backwards compatible)
   enrolledEmails: [{
     type: String,
     lowercase: true,
     trim: true
-  }],
-  createdAt: {
-    type: Date,
-    default: Date.now
-  }
-});
+  }]
+}, { timestamps: true });
 
 // Ensure unique course code per teacher
 courseSchema.index({ teacherId: 1, courseCode: 1 }, { unique: true });

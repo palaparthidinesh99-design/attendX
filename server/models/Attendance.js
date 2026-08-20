@@ -4,26 +4,52 @@ const attendanceSchema = new mongoose.Schema({
   sessionId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Session',
-    required: true
+    required: true,
+    index: true
+  },
+  courseId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course',
+    index: true
   },
   studentId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
+    required: true,
+    index: true
+  },
+
+  audioTokenMatched: { type: Boolean },
+  audioTokenWindow: { type: Number },
+  distanceMeters: { type: Number },
+
+  status: {
+    type: String,
+    enum: ['PRESENT', 'LATE', 'REVIEW', 'ABSENT', 'EXCUSED'],
+    required: true,
+    index: true
+  },
+  reviewReasons: [{
+    type: String,
+    enum: ['DEVICE_FANOUT', 'GPS_MISMATCH', 'AUDIO_UNMATCHED']
+  }],
+  generatedBy: {
+    type: String,
+    enum: ['SCAN', 'ABSENTEE_JOB'],
     required: true
   },
-  timestamp: {
-    type: Date,
-    default: Date.now
-  },
-  // Exact distance at time of scan — useful for audit log / dispute resolution
-  distanceMeters: {
-    type: Number
-  }
-});
 
-// THE key constraint — this compound unique index is the entire replay/duplicate defense.
-// The DB rejects a second Attendance.create() for the same (session, student) pair
-// with error code 11000 (duplicate key). No separate "used tokens" tracking needed.
-attendanceSchema.index({ sessionId: 1, studentId: 1 }, { unique: true });
+  deviceFingerprint: { type: String, index: true },
+  ipAddress: { type: String },
+
+  dateString: { type: String, required: true, index: true },
+  timeString: { type: String }
+}, { timestamps: true });
+
+// Compound Unique Indexes & Performance Query Indexes
+attendanceSchema.index({ sessionId: 1, studentId: 1 }, { unique: true });  // Duplicate prevention
+attendanceSchema.index({ studentId: 1, courseId: 1, dateString: -1 });     // Calendar heatmap & percentage
+attendanceSchema.index({ sessionId: 1 });                                   // Streamed CSV export
+attendanceSchema.index({ sessionId: 1, deviceFingerprint: 1 });             // Device fanout anomaly check
 
 module.exports = mongoose.model('Attendance', attendanceSchema);

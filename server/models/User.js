@@ -21,30 +21,30 @@ const userSchema = new mongoose.Schema({
   },
   role: {
     type: String,
-    enum: ['teacher', 'student'],
-    required: true
+    enum: ['TEACHER', 'STUDENT', 'teacher', 'student'],
+    required: true,
+    index: true
   },
   // Student-specific: roll number / student ID
   rollNumber: {
     type: String,
-    trim: true
+    trim: true,
+    index: true,
+    sparse: true
   },
   // WebAuthn Hardware Passkeys (TouchID / FaceID / Windows Hello / Android Biometrics)
   webauthnDevices: [{
     credentialID: { type: String, required: true },
     publicKey: { type: String, required: true },
     counter: { type: Number, default: 0 },
-    transports: [String]
+    transports: [String],
+    authenticatorType: { type: String }
   }],
   currentChallenge: {
     type: String,
     default: null
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
   }
-});
+}, { timestamps: true });
 
 // Hash password before saving
 userSchema.pre('save', async function (next) {

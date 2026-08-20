@@ -32,16 +32,23 @@ const sessionSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  startTime: {
-    type: Date,
-    default: Date.now
+  currentTokenWindow: {
+    type: Number,
+    default: 0
   },
-  endTime: Date,
   active: {
     type: Boolean,
-    default: true
+    default: true,
+    index: true
+  },
+  closedAt: Date,
+  dateString: {
+    type: String,
+    index: true
   }
-});
+}, { timestamps: true });
+
+sessionSchema.index({ courseId: 1, dateString: -1 });
 
 // Auto-generate secret before saving if not provided
 sessionSchema.pre('save', function (next) {

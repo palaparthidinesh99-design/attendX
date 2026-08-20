@@ -180,7 +180,9 @@ router.get('/:id/export-csv', authenticate, requireRole('teacher'), async (req, 
   }
 });
 
-// POST /api/sessions/:id/end — Teacher ends a session
+const { closeSessionAndBackfillAbsentees } = require('../utils/absenteeJob');
+
+// POST /api/sessions/:id/end — Teacher ends a session & triggers absentee backfill job
 router.post('/:id/end', authenticate, requireRole('teacher'), async (req, res, next) => {
   try {
     const session = await Session.findById(req.params.id);
@@ -190,11 +192,9 @@ router.post('/:id/end', authenticate, requireRole('teacher'), async (req, res, n
       return res.status(403).json({ error: 'Not your session' });
     }
 
-    session.active = false;
-    session.endTime = new Date();
-    await session.save();
+    const closureResult = await closeSessionAndBackfillAbsentees(session._id);
 
-    res.json({ message: 'Session ended', endTime: session.endTime });
+    res.json({ message: 'Session ended & absentees backfilled', closureResult });
   } catch (err) {
     next(err);
   }

@@ -74,10 +74,18 @@ router.post('/scan', authenticate, requireRole('student'), async (req, res, next
 
     // --- CHECK 4: DB write — unique index rejects duplicates ---
     try {
+      const now = new Date();
+      const dateString = now.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const timeString = now.toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour12: true }) + ' IST';
+
       const record = await Attendance.create({
         sessionId: session._id,
+        courseId: session.courseId?._id || session.courseId,
         studentId: req.user._id,
-        timestamp: new Date(),
+        status: 'PRESENT',
+        generatedBy: 'SCAN',
+        dateString,
+        timeString,
         distanceMeters: Math.round(distanceMeters)
       });
 
@@ -86,7 +94,9 @@ router.post('/scan', authenticate, requireRole('student'), async (req, res, next
         message: 'Attendance marked successfully',
         record: {
           sessionId: record.sessionId,
-          timestamp: record.timestamp,
+          status: record.status,
+          dateString: record.dateString,
+          timeString: record.timeString,
           distanceMeters: record.distanceMeters
         }
       });
