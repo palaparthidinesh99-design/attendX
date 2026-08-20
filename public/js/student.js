@@ -227,7 +227,30 @@ async function startBiometricScanWorkflow() {
     const verifyData = await verifyRes.json();
 
     if (verifyRes.ok && verifyData.verified) {
-      setScanStatus('✓ Touch ID Verified! Opening QR scanner camera (30s window active)…', 'success');
+      setScanStatus('✓ Biometrics Verified! 🎙️ Step 2: Listening for Classroom Near-Ultrasonic Sound (~18.5kHz)...', 'info');
+
+      const statusContainer = document.getElementById('ultrasonic-status-container');
+      const statusText = document.getElementById('ultrasonic-status-text');
+      if (statusContainer) statusContainer.classList.remove('hidden');
+      if (statusText) {
+        statusText.innerHTML = `🎙️ <strong style="color:#60a5fa;">Step 2: Listening &amp; Verifying Near-Ultrasonic Sound (~18.5kHz FSK)...</strong>`;
+      }
+
+      // Auto-start Ultrasonic Audio Listener
+      if (window.ultrasonicReceiver) {
+        window.ultrasonicReceiver.startListening(
+          (capturedToken) => {
+            if (statusText) {
+              statusText.innerHTML = `🔊 <span style="color:#10b981;font-weight:700;">✓ Near-Ultrasonic Classroom Sound Verified! (Token: ${capturedToken})</span>`;
+            }
+            setScanStatus(`🔊 Near-Ultrasonic Classroom Sound Verified! Token captured (${capturedToken}). Submit scan below.`, 'success');
+          },
+          (err) => {
+            console.warn('Ultrasonic listener warning:', err);
+          }
+        );
+      }
+
       document.getElementById('scan-prompt').classList.add('hidden');
       start30SecVerificationTimer();
       await openQRScannerCamera();

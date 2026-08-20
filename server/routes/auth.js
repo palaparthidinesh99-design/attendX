@@ -81,6 +81,24 @@ router.post('/register', async (req, res, next) => {
       rollNumber: role === 'student' && rollNumber ? String(rollNumber).trim() : undefined
     });
 
+    // Auto-enroll student into courses pre-added by teacher emails
+    if (role === 'student' || String(role).toLowerCase() === 'student') {
+      try {
+        const Course = require('../models/Course');
+        const Enrollment = require('../models/Enrollment');
+        const preEnrolledCourses = await Course.find({ enrolledEmails: cleanEmail });
+        for (let c of preEnrolledCourses) {
+          await Enrollment.updateOne(
+            { studentId: user._id, courseId: c._id },
+            { $set: { status: 'ACTIVE' } },
+            { upsert: true }
+          );
+        }
+      } catch (enrollErr) {
+        console.error('Auto-enroll error:', enrollErr);
+      }
+    }
+
     const token = signToken(user);
 
     res.status(201).json({
