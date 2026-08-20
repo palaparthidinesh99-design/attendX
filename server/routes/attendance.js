@@ -133,14 +133,29 @@ router.get('/my', authenticate, requireRole('student'), async (req, res, next) =
 router.get('/analytics', authenticate, requireRole('student'), async (req, res, next) => {
   try {
     const Course = require('../models/Course');
+    const Enrollment = require('../models/Enrollment');
 
-    // 1. Find all courses where student is enrolled by ID or email
-    const courses = await Course.find({
+    // 1. Query enrolled courses via Enrollment join collection
+    const enrollments = await Enrollment.find({ studentId: req.user._id, status: 'ACTIVE' }).populate({
+      path: 'courseId',
+      populate: { path: 'teacherId', select: 'name email' }
+    });
+
+    let courses = enrollments.map(e => e.courseId).filter(Boolean);
+
+    // Fallback: Also search by email in Course.enrolledEmails
+    const legacyCourses = await Course.find({
       $or: [
         { enrolledStudents: req.user._id },
         { enrolledEmails: req.user.email.toLowerCase() }
       ]
     }).populate('teacherId', 'name email');
+
+    const courseMap = new Map();
+    courses.concat(legacyCourses).forEach(c => {
+      if (c && c._id) courseMap.set(c._id.toString(), c);
+    });
+    courses = Array.from(courseMap.values());
 
     // 2. Fetch all student attendance records
     const myAttendance = await Attendance.find({ studentId: req.user._id })

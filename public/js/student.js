@@ -617,12 +617,14 @@ function renderSidePanelDayDetails(dateStr) {
 
 // ── Subject Analytics & Attendance Synchronization ──────────────────────
 async function loadAnalytics() {
+  const statsList = document.getElementById('subject-stats-list');
   try {
     const res = await fetch(`${API}/api/attendance/analytics`, {
       headers: { Authorization: `Bearer ${getToken()}` }
     });
     if (!res.ok) {
-      if (res.status === 401) logout();
+      if (res.status === 401) return logout();
+      if (statsList) statsList.innerHTML = `<div class="empty-state"><p>Not enrolled in any active courses yet.</p></div>`;
       return;
     }
 
@@ -630,10 +632,9 @@ async function loadAnalytics() {
     window.sessionsByDateMap = data.sessionsByDate || {};
 
     // 1. Render Subject Percentage Stats
-    const statsList = document.getElementById('subject-stats-list');
     if (statsList) {
       if (!data.subjects || !data.subjects.length) {
-        statsList.innerHTML = `<div class="empty-state"><p>You are not enrolled in any courses yet</p></div>`;
+        statsList.innerHTML = `<div class="empty-state"><p>No courses enrolled yet. Enter a join code or ask your instructor to add your email.</p></div>`;
       } else {
         statsList.innerHTML = data.subjects.map(s => {
           const colorClass = s.percentage >= 75 ? 'var(--accent-success)' : 'var(--accent-danger)';
