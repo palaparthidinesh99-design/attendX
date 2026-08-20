@@ -61,20 +61,22 @@ function showCoursesList() {
 
 // ── Load & Render Course Cards ──────────────────────────────────────────
 async function loadCourses() {
+  const container = document.getElementById('courses-grid-container');
+  if (!container) return;
+
   try {
     const res = await fetch(`${API}/api/courses`, { headers: authHeaders() });
     if (!res.ok) {
-      if (res.status === 401) logout();
+      if (res.status === 401) return logout();
+      const errData = await res.json().catch(() => ({}));
+      container.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><p>Error loading courses: ${errData.error || 'Unauthorized'}</p></div>`;
       return;
     }
 
     const courses = await res.json();
-    const container = document.getElementById('courses-grid-container');
-
-    if (!container) return;
-
     window.coursesMap = {};
-    if (!courses || !courses.length) {
+
+    if (!Array.isArray(courses) || !courses.length) {
       container.innerHTML = `
         <div class="empty-state" style="grid-column:1/-1;">
           <p>No courses created yet. Click "+ Create New Course" above to add your first subject!</p>
@@ -89,7 +91,7 @@ async function loadCourses() {
         <span class="badge badge-purple mb-1">${c.courseCode}</span>
         <h3 style="margin-top:0.2rem;">${c.courseName}</h3>
         <p style="font-size:0.8rem;margin-top:0.35rem;color:var(--text-muted);">
-          👥 ${c.enrolledEmails ? c.enrolledEmails.length : 0} enrolled students
+          👥 ${c.enrolledCount != null ? c.enrolledCount : (c.enrolledEmails ? c.enrolledEmails.length : 0)} enrolled students
         </p>
         <button type="button" class="btn btn-ghost btn-sm btn-full mt-2" data-course-id="${c._id}">
           Open Course Workspace →
@@ -109,6 +111,9 @@ async function loadCourses() {
     }
   } catch (err) {
     console.error('Course load error:', err);
+    if (container) {
+      container.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><p>Failed to connect to server. Please check your network connection.</p></div>`;
+    }
   }
 }
 

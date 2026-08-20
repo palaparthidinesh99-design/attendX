@@ -44,7 +44,7 @@ router.post('/', authenticate, requireRole('teacher'), async (req, res, next) =>
 // GET /api/courses — List teacher's created courses or student's enrolled courses
 router.get('/', authenticate, async (req, res, next) => {
   try {
-    if (req.user.role === 'teacher') {
+    if (String(req.user.role).toLowerCase() === 'teacher') {
       const courses = await Course.find({ teacherId: req.user._id }).sort({ createdAt: -1 }).lean();
       
       const coursesWithStats = await Promise.all(courses.map(async (c) => {
