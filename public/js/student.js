@@ -681,10 +681,36 @@ window.selectCalendarDate = selectCalendarDate;
 window.renderSidePanelDayDetails = renderSidePanelDayDetails;
 window.logout = logout;
 
+function toggleUltrasonicReceiver() {
+  const container = document.getElementById('ultrasonic-status-container');
+  const btn = document.getElementById('btn-listen-ultrasonic');
+  if (!window.ultrasonicReceiver) return;
+
+  if (window.ultrasonicReceiver.isListening) {
+    window.ultrasonicReceiver.stopListening();
+    if (container) container.classList.add('hidden');
+    if (btn) btn.textContent = '🎙️ Listen for Ultrasonic Audio Token (~18.5kHz)';
+  } else {
+    if (container) container.classList.remove('hidden');
+    if (btn) btn.textContent = '🛑 Stop Listening';
+    window.ultrasonicReceiver.startListening(
+      (token) => {
+        alert('🎙️ Ultrasonic token captured from classroom speaker!');
+      },
+      (err) => {
+        alert('Microphone permission required for ultrasonic token listener: ' + err.message);
+        if (container) container.classList.add('hidden');
+        if (btn) btn.textContent = '🎙️ Listen for Ultrasonic Audio Token (~18.5kHz)';
+      }
+    );
+  }
+}
+
 // ── Bind Event Listeners ────────────────────────────────────────────────
 function bindStudentEventListeners() {
   document.getElementById('setup-passkey-btn')?.addEventListener('click', setupPasskey);
   document.getElementById('btn-start-biometric-scan')?.addEventListener('click', startBiometricScanWorkflow);
+  document.getElementById('btn-listen-ultrasonic')?.addEventListener('click', toggleUltrasonicReceiver);
   document.getElementById('btn-flip-qr-camera')?.addEventListener('click', flipQRCamera);
   document.getElementById('btn-reset-scanner')?.addEventListener('click', resetScanner);
   document.getElementById('btn-submit-manual-token')?.addEventListener('click', submitManualToken);

@@ -398,6 +398,9 @@ async function endSession() {
     }
 
     stopPolling();
+    if (window.ultrasonicTransmitter) {
+      window.ultrasonicTransmitter.stopTransmitting();
+    }
     if (qrCodeInstance) {
       try { qrCodeInstance.clear(); } catch (_) {}
       qrCodeInstance = null;
@@ -462,6 +465,9 @@ async function updateQRSyncLoop() {
       if (!res.ok) return;
       const data = await res.json();
       renderQR(data.qrPayload);
+      if (window.ultrasonicTransmitter && data.token) {
+        window.ultrasonicTransmitter.startTransmitting(data.token);
+      }
     } catch (err) {
       console.error('QR fetch error:', err);
     }

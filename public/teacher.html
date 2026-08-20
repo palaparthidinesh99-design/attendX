@@ -171,6 +171,17 @@
                 </div>
               </div>
 
+              <!-- Near-Ultrasonic Audio Token Transmitter Status Bar -->
+              <div class="ultrasonic-transmitter-bar mt-2" style="background:rgba(59,130,246,0.1);border:1px solid #3b82f6;border-radius:var(--radius-sm);padding:0.75rem;text-align:center;">
+                <div style="font-size:0.85rem;font-weight:600;color:#60a5fa;" id="ultrasonic-tx-status">
+                  🔊 Emitting Near-Ultrasonic Sound Wave (~18.5kHz FSK)
+                </div>
+                <small style="color:var(--text-muted);display:block;margin-top:0.2rem;">
+                  Classroom speakers continuously transmit 15s HMAC token in near-ultrasound range.
+                </small>
+                <button type="button" class="btn btn-ghost btn-sm mt-1" id="btn-toggle-ultrasonic-tx">🔊 Mute / Play Audio Stream</button>
+              </div>
+
               <div id="end-status"></div>
             </div>
 
@@ -281,6 +292,7 @@
     </div>
   </div>
 
+  <script src="/js/audioEngine.js"></script>
   <script src="/js/teacher.js"></script>
 </body>
 </html>
