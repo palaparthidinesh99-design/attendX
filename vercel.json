@@ -1,0 +1,32 @@
+{
+  "version": 2,
+  "name": "attendx-frontend",
+  "builds": [
+    {
+      "src": "public/**",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/css/(.*)",
+      "dest": "/public/css/$1"
+    },
+    {
+      "src": "/js/(.*)",
+      "dest": "/public/js/$1"
+    },
+    {
+      "src": "/student",
+      "dest": "/public/student.html"
+    },
+    {
+      "src": "/teacher",
+      "dest": "/public/teacher.html"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/public/$1"
+    }
+  ]
+}
