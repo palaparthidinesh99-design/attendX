@@ -88,9 +88,13 @@ router.get('/:id/attendance', authenticate, requireRole('teacher'), async (req, 
       return res.status(403).json({ error: 'Not your session' });
     }
 
-    const records = await Attendance.find({ sessionId: req.params.id })
+    // Only fetch students who actually checked in (PRESENT, LATE, REVIEW)
+    const records = await Attendance.find({
+      sessionId: req.params.id,
+      status: { $in: ['PRESENT', 'LATE', 'REVIEW'] }
+    })
       .populate('studentId', 'name email rollNumber')
-      .sort({ timestamp: -1 });
+      .sort({ createdAt: -1 });
 
     res.json({
       sessionId: session._id,
@@ -99,7 +103,9 @@ router.get('/:id/attendance', authenticate, requireRole('teacher'), async (req, 
       count: records.length,
       records: records.map(r => ({
         student: r.studentId,
-        timestamp: r.timestamp,
+        timestamp: r.scannedAt || r.createdAt || r.timestamp || new Date(),
+        timeString: r.timeString || '',
+        status: r.status,
         distanceMeters: r.distanceMeters
       }))
     });

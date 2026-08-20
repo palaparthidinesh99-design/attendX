@@ -581,14 +581,30 @@ function renderAttendance(records, count, className) {
     return;
   }
 
-  const latest = new Date(records[0].timestamp);
-  document.getElementById('last-scan-time').textContent = latest.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  let latestStr = 'Just Now';
+  if (records[0]) {
+    const rawLatest = records[0].timestamp ? new Date(records[0].timestamp) : new Date();
+    if (!isNaN(rawLatest.getTime()) && rawLatest.getFullYear() > 1970) {
+      latestStr = rawLatest.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } else {
+      latestStr = records[0].timeString || 'Just Now';
+    }
+  }
+  document.getElementById('last-scan-time').textContent = latestStr;
 
   document.getElementById('attendance-list').innerHTML = records.map(r => {
     const s = r.student || {};
     const initial = s.name ? s.name[0].toUpperCase() : '?';
-    const time = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    const dist = r.distanceMeters != null ? r.distanceMeters : '—';
+    
+    let timeStr = 'Just Now';
+    const rawDate = r.timestamp ? new Date(r.timestamp) : new Date();
+    if (!isNaN(rawDate.getTime()) && rawDate.getFullYear() > 1970) {
+      timeStr = rawDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    } else {
+      timeStr = r.timeString || 'Just Now';
+    }
+
+    const dist = r.distanceMeters != null ? `${r.distanceMeters}m away` : '—';
     const roll = s.rollNumber ? `<span>Roll: ${s.rollNumber}</span>` : '';
 
     return `
@@ -599,10 +615,10 @@ function renderAttendance(records, count, className) {
           <div class="attendance-meta">
             ${roll}
             <span>${s.email || ''}</span>
-            <span>🕒 ${time}</span>
+            <span>🕒 ${timeStr}</span>
           </div>
         </div>
-        <div class="distance-pill">📍 ${dist}m away</div>
+        <div class="distance-pill">📍 ${dist}</div>
       </div>`;
   }).join('');
 }
