@@ -146,18 +146,28 @@ async function openCourseWorkspace(courseId) {
     addBtn.onclick = () => showEnrollModal(courseId, selectedCourse.code);
   }
 
-  // 2. Fetch full student roster in background
+  // 2. Fetch fresh roster & past session ledgers from server
+  fetchCourseStudents(courseId);
+  loadPastSessionsForCourse(courseId);
+}
+
+async function fetchCourseStudents(courseId) {
   try {
     const res = await fetch(`${API}/api/courses/${courseId}/students`, { headers: authHeaders() });
     if (!res.ok) return;
 
     const data = await res.json();
-    selectedCourse.code = data.courseCode;
-    selectedCourse.name = data.courseName;
+    if (selectedCourse) {
+      selectedCourse.code = data.courseCode;
+      selectedCourse.name = data.courseName;
+    }
 
-    document.getElementById('ws-course-code').textContent = data.courseCode;
-    document.getElementById('ws-course-name').textContent = data.courseName;
-    document.getElementById('ws-enrolled-count').textContent = `${data.enrolledCount} enrolled student emails`;
+    const wsCode = document.getElementById('ws-course-code');
+    const wsName = document.getElementById('ws-course-name');
+    const wsCount = document.getElementById('ws-enrolled-count');
+    if (wsCode) wsCode.textContent = data.courseCode;
+    if (wsName) wsName.textContent = data.courseName;
+    if (wsCount) wsCount.textContent = `${data.enrolledCount} enrolled student emails`;
 
     const rosterList = document.getElementById('ws-roster-list');
     if (rosterList) {
@@ -170,8 +180,7 @@ async function openCourseWorkspace(courseId) {
           </div>
         `).join('');
       }
-    fetchCourseStudents(courseId);
-    loadPastSessionsForCourse(courseId);
+    }
   } catch (err) {
     console.error('Fetch course students error:', err);
   }
