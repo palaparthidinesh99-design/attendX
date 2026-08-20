@@ -70,6 +70,36 @@ router.get('/', authenticate, async (req, res, next) => {
   }
 });
 
+// GET /api/courses/:id/students — Get course details & roster of enrolled student emails
+router.get('/:id/students', authenticate, requireRole('teacher'), async (req, res, next) => {
+  try {
+    const course = await Course.findOne({ _id: req.params.id, teacherId: req.user._id });
+    if (!course) return res.status(404).json({ error: 'Course not found or unauthorized' });
+
+    // Fetch active enrollments from Enrollment join collection
+    const activeEnrollments = await Enrollment.find({ courseId: course._id, status: 'ACTIVE' })
+      .populate('studentId', 'name email rollNumber');
+
+    const enrolledStudents = activeEnrollments.map(e => e.studentId).filter(Boolean);
+    const activeEmails = enrolledStudents.map(s => s.email.toLowerCase());
+
+    // Merge with course.enrolledEmails array (pre-enrolled emails)
+    const allEmails = Array.from(new Set([...(course.enrolledEmails || []), ...activeEmails]));
+
+    res.json({
+      courseId: course._id,
+      courseCode: course.courseCode,
+      courseName: course.courseName,
+      joinCode: course.joinCode,
+      enrolledCount: allEmails.length,
+      enrolledEmails: allEmails,
+      enrolledStudents
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/courses/:id/enroll — Teacher enrolls student email(s) into course
 router.post('/:id/enroll', authenticate, requireRole('teacher'), async (req, res, next) => {
   try {
@@ -90,9 +120,22 @@ router.post('/:id/enroll', authenticate, requireRole('teacher'), async (req, res
       return res.status(400).json({ error: 'No valid emails provided' });
     }
 
-    const students = await User.find({ email: { $in: emailList }, role: 'student' });
-    let enrolledCount = 0;
+    // Save to course.enrolledEmails array for legacy & pre-enrollment support
+    if (!Array.isArray(course.enrolledEmails)) course.enrolledEmails = [];
+    for (let email of emailList) {
+      if (!course.enrolledEmails.includes(email)) {
+        course.enrolledEmails.push(email);
+      }
+    }
+    await course.save();
 
+    // Upsert into Enrollment join collection for existing registered students
+    const students = await User.find({
+      email: { $in: emailList },
+      role: { $in: ['student', 'STUDENT'] }
+    });
+
+    let enrolledCount = 0;
     for (let student of students) {
       await Enrollment.updateOne(
         { studentId: student._id, courseId: course._id },
@@ -102,7 +145,7 @@ router.post('/:id/enroll', authenticate, requireRole('teacher'), async (req, res
       enrolledCount++;
     }
 
-    res.json({ message: `Successfully enrolled ${enrolledCount} student(s)` });
+    res.json({ message: `Successfully enrolled ${emailList.length} student email(s)` });
   } catch (err) {
     next(err);
   }
