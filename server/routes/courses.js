@@ -12,7 +12,7 @@ const router = express.Router();
 // POST /api/courses — Teacher creates a course
 router.post('/', authenticate, requireRole('teacher'), async (req, res, next) => {
   try {
-    const { courseCode, courseName } = req.body;
+    const { courseCode, courseName, minAttendancePercentage } = req.body;
 
     if (!courseCode || !courseName) {
       return res.status(400).json({ error: 'courseCode and courseName are required' });
@@ -20,6 +20,7 @@ router.post('/', authenticate, requireRole('teacher'), async (req, res, next) =>
 
     const cleanCode = courseCode.trim().toUpperCase();
     const cleanName = courseName.trim();
+    const minPct = minAttendancePercentage != null ? Math.max(1, Math.min(100, Number(minAttendancePercentage))) : 75;
 
     const existing = await Course.findOne({ teacherId: req.user._id, courseCode: cleanCode });
     if (existing) {
@@ -32,7 +33,8 @@ router.post('/', authenticate, requireRole('teacher'), async (req, res, next) =>
       teacherId: req.user._id,
       courseCode: cleanCode,
       courseName: cleanName,
-      joinCode
+      joinCode,
+      minAttendancePercentage: minPct
     });
 
     res.status(201).json(course);

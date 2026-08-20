@@ -155,15 +155,14 @@
           </div>
         </div>
 
-        <!-- RIGHT PANEL: Analytics & Compact Calendar with Side Panel -->
+        <!-- RIGHT PANEL: Course Attendance Summary -->
         <div>
-
           <!-- 1. Subject-wise Percentage & Attendance Stats -->
-          <div class="card mb-2">
+          <div class="card">
             <div class="section-header">
               <div>
                 <h2>Course Attendance Summary</h2>
-                <p>Attendance percentage per course (Minimum required: 75%)</p>
+                <p>Enrolled course stats &amp; percentage overview</p>
               </div>
               <button type="button" class="btn btn-ghost btn-sm" id="btn-refresh-analytics">↻ Refresh</button>
             </div>
@@ -174,30 +173,6 @@
               </div>
             </div>
           </div>
-
-          <!-- 2. Compact Attendance Calendar with Side Panel -->
-          <div class="card">
-            <div class="section-header mb-1">
-              <div>
-                <h2>Attendance Calendar</h2>
-                <p>Select a date on the calendar to view session details</p>
-              </div>
-            </div>
-
-            <div class="calendar-layout-container">
-              <!-- Compact Calendar Widget -->
-              <div id="calendar-month-container" class="calendar-month-widget"></div>
-
-              <!-- Day Details Sidebar -->
-              <div id="calendar-side-panel" class="calendar-side-panel">
-                <h4 id="side-panel-title" style="font-size:0.92rem;margin-bottom:0.4rem;">Select a Date</h4>
-                <p style="font-size:0.78rem;color:var(--text-muted);" id="side-panel-subtitle">Click a day on the calendar grid to view classes held, attended, or missed.</p>
-                <div id="side-panel-content" style="margin-top:0.75rem;display:flex;flex-direction:column;gap:0.5rem;"></div>
-              </div>
-            </div>
-
-          </div>
-
         </div>
 
       </div>

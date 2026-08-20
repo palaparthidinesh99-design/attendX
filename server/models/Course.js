@@ -36,7 +36,14 @@ const courseSchema = new mongoose.Schema({
     type: String,
     lowercase: true,
     trim: true
-  }]
+  }],
+  // Custom required attendance percentage set by teacher (default 75%)
+  minAttendancePercentage: {
+    type: Number,
+    default: 75,
+    min: 1,
+    max: 100
+  }
 }, { timestamps: true });
 
 // Ensure unique course code per teacher

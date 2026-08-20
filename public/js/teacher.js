@@ -226,9 +226,9 @@ function hideCreateCourseModal() { hideEl('course-modal'); setStatus('course-mod
 
 document.getElementById('create-course-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const btn = document.getElementById('save-course-btn');
   const code = document.getElementById('new-course-code').value.trim();
   const name = document.getElementById('new-course-name').value.trim();
+  const minPct = document.getElementById('new-course-min-pct')?.value || 75;
   const emails = document.getElementById('new-course-emails').value.trim();
 
   if (!code || !name) return setStatus('course-modal-status', 'Course Code and Course Name are required');
@@ -240,7 +240,7 @@ document.getElementById('create-course-form')?.addEventListener('submit', async 
     const res = await fetch(`${API}/api/courses`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ courseCode: code, courseName: name })
+      body: JSON.stringify({ courseCode: code, courseName: name, minAttendancePercentage: Number(minPct) })
     });
 
     const data = await res.json();

@@ -185,6 +185,8 @@ router.get('/analytics', authenticate, requireRole('student'), async (req, res, 
         ? Math.min(100, Math.round((attendedCount / totalEndedCount) * 100))
         : 100;
 
+      const requiredPct = c.minAttendancePercentage || 75;
+
       return {
         courseId: c._id,
         courseCode: c.courseCode,
@@ -193,8 +195,9 @@ router.get('/analytics', authenticate, requireRole('student'), async (req, res, 
         attendedSessions: attendedCount,
         totalEndedSessions: totalEndedCount,
         totalSessions: courseSessions.length,
+        minAttendancePercentage: requiredPct,
         percentage,
-        isEligible: percentage >= 75
+        isEligible: percentage >= requiredPct
       };
     }));
 

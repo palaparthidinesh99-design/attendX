@@ -254,6 +254,7 @@ async function openQRScannerCamera() {
 
   document.getElementById('scan-prompt')?.classList.add('hidden');
   document.getElementById('face-verification-view')?.classList.add('hidden');
+  document.getElementById('qr-reader')?.classList.remove('hidden');
   document.getElementById('qr-reader-container')?.classList.remove('hidden');
 
   setScanStatus('📷 Point camera at teacher\'s rotating QR code', 'info');
@@ -423,11 +424,12 @@ function showSuccessView(data) {
 
 async function resetScanner() {
   await stopCameraStream();
-  document.getElementById('success-view').classList.add('hidden');
+  document.getElementById('success-view')?.classList.add('hidden');
   document.getElementById('scan-prompt')?.classList.remove('hidden');
-  document.getElementById('qr-reader')?.classList.add('hidden');
+  document.getElementById('qr-reader')?.classList.remove('hidden');
   document.getElementById('qr-reader-container')?.classList.add('hidden');
   document.getElementById('face-verification-view')?.classList.add('hidden');
+  stopVerificationTimer();
   setScanStatus('', '');
   isProcessing = false;
 }
@@ -637,33 +639,35 @@ async function loadAnalytics() {
         statsList.innerHTML = `<div class="empty-state"><p>No courses enrolled yet. Enter a join code or ask your instructor to add your email.</p></div>`;
       } else {
         statsList.innerHTML = data.subjects.map(s => {
-          const colorClass = s.percentage >= 75 ? 'var(--accent-success)' : 'var(--accent-danger)';
-          const badge = s.percentage >= 75
+          const reqPct = s.minAttendancePercentage || 75;
+          const isOk = s.percentage >= reqPct;
+          const colorClass = isOk ? 'var(--accent-success)' : 'var(--accent-danger)';
+          const badge = isOk
             ? `<span class="badge badge-green">Eligible (${s.percentage}%)</span>`
-            : `<span class="badge badge-red">Low Attendance (${s.percentage}%)</span>`;
+            : `<span class="badge badge-red">Shortage (${s.percentage}%)</span>`;
 
           return `
-            <div class="subject-card">
-              <div class="flex items-center justify-between">
+            <div class="subject-card mb-2" style="background:var(--bg-secondary);padding:0.9rem;border-radius:var(--radius-sm);border:1px solid var(--border);">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.5rem;">
                 <div>
-                  <strong>${s.courseCode}</strong> <span style="font-size:0.85rem;color:var(--text-secondary);">${s.courseName}</span>
-                  <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.15rem;">
-                    Teacher: ${s.teacherName} &nbsp;|&nbsp; Attended: <strong>${s.attendedSessions} / ${s.totalEndedSessions}</strong> ended classes
+                  <strong style="font-size:1rem;color:var(--text-main);">${s.courseCode}</strong>
+                  <span style="font-size:0.85rem;color:var(--text-muted);">&nbsp;— ${s.courseName}</span>
+                  <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.25rem;">
+                    Teacher: ${s.teacherName} &nbsp;|&nbsp; Minimum Required: <strong>${reqPct}%</strong>
+                  </div>
+                  <div style="font-size:0.85rem;margin-top:0.35rem;color:var(--text-main);font-weight:600;">
+                    Attended: ${s.attendedSessions} / ${s.totalEndedSessions} Ended Classes
                   </div>
                 </div>
-                ${badge}
+                <div>${badge}</div>
               </div>
-              <div class="progress-bar-bg">
-                <div class="progress-bar-fill" style="width:${s.percentage}%;background:${colorClass};"></div>
+              <div class="progress-bar-bg" style="margin-top:0.5rem;height:6px;background:rgba(255,255,255,0.1);border-radius:3px;overflow:hidden;">
+                <div class="progress-bar-fill" style="width:${s.percentage}%;height:100%;background:${colorClass};"></div>
               </div>
             </div>`;
         }).join('');
       }
     }
-
-    // 2. Render Compact Calendar Grid
-    renderInteractiveCalendar();
-
   } catch (err) {
     console.error('Analytics load error:', err);
   }
