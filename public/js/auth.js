@@ -13,7 +13,7 @@ function saveAuth(token, user) {
 }
 
 function redirectByRole(role) {
-  window.location.href = role === 'teacher' ? '/teacher.html' : '/student.html';
+  window.location.href = String(role || '').toLowerCase() === 'teacher' ? '/teacher.html' : '/student.html';
 }
 
 // Redirect if already logged in

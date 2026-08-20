@@ -18,7 +18,7 @@ function logout() {
   const user = getUser();
   const token = getToken();
   if (!user || !token) return (window.location.href = '/?logout=1');
-  if (user.role !== 'student') return (window.location.href = '/teacher.html');
+  if (String(user.role).toLowerCase() !== 'student') return (window.location.href = '/teacher.html');
   const navName = document.getElementById('nav-name');
   if (navName) navName.textContent = user.name;
 })();
