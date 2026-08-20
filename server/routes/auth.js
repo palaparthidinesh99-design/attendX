@@ -21,12 +21,28 @@ function signToken(user) {
 }
 
 const getRPID = (req) => {
+  const origin = req.get('origin') || req.get('referer');
+  if (origin) {
+    try {
+      const url = new URL(origin);
+      return url.hostname;
+    } catch (e) {}
+  }
   const host = req.get('host') || 'localhost';
   return host.split(':')[0];
 };
 
 const getOrigin = (req) => {
-  const protocol = req.protocol || 'http';
+  const origin = req.get('origin');
+  if (origin) return origin;
+  const referer = req.get('referer');
+  if (referer) {
+    try {
+      const url = new URL(referer);
+      return url.origin;
+    } catch (e) {}
+  }
+  const protocol = req.protocol || 'https';
   const host = req.get('host') || 'localhost:3000';
   return `${protocol}://${host}`;
 };
