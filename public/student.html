@@ -77,63 +77,53 @@
     <div class="container">
       <div class="student-layout">
 
-        <!-- LEFT PANEL: WebAuthn Hardware Passkeys & Dual Verification (Ultrasonic Audio / QR) -->
+        <!-- LEFT PANEL: 3-Layer Security (Biometrics + Rotating Token + GPS Geofence) -->
         <div>
-          <!-- WebAuthn Biometric Passkey Setup Card -->
+          <!-- Biometric Passkey & Camera Face Setup Card -->
           <div class="card mb-2" id="card-passkey-setup">
             <div class="section-header" style="margin-bottom:0.5rem;">
               <div>
-                <h3>🔑 Biometric Passkeys</h3>
-                <p style="font-size:0.8rem;">Hardware-Backed Secure Enclave Protection</p>
+                <h3>🔑 Biometric Identity Setup</h3>
+                <p style="font-size:0.8rem;">Hardware Passkey or In-App Camera Face Scan</p>
               </div>
               <span id="passkey-status-badge" class="badge badge-red">Not Registered</span>
             </div>
 
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;margin-top:0.5rem;">
-              <button type="button" class="btn btn-primary btn-sm" id="setup-touchid-btn">
-                👆 Touch ID / Fingerprint
+            <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem;">
+              <button type="button" class="btn btn-primary btn-sm" id="setup-passkey-btn">
+                👆 Register Hardware Touch ID / Face ID
               </button>
-              <button type="button" class="btn btn-secondary btn-sm" id="setup-faceid-btn">
-                👤 Face ID / Face Unlock
+              <button type="button" class="btn btn-secondary btn-sm" id="setup-face-camera-btn">
+                👤 Register In-App Camera Face Scan
               </button>
             </div>
           </div>
 
-          <!-- Attendance Verification & Ultrasonic Receiver Card -->
+          <!-- Attendance Verification & Camera QR Scanner Card -->
           <div class="card">
             <div class="scanner-section">
               <div id="scan-prompt" style="text-align:center;">
                 <h2>Mark Attendance</h2>
-                <p style="font-size:0.82rem;margin-top:0.2rem;" id="scan-prompt-subtext">Automated: Auto-listens for classroom sound &amp; verifies biometrics</p>
+                <p style="font-size:0.82rem;margin-top:0.2rem;" id="scan-prompt-subtext">3-Layer Protection: Biometrics + 15s Rotating Token + GPS Geofence</p>
                 
                 <div style="display:flex;flex-direction:column;gap:0.6rem;margin-top:0.8rem;width:100%;max-width:320px;">
                   <button type="button" class="btn btn-primary btn-lg" id="btn-start-biometric-scan">
-                    🚀 Start Automated Check-In
+                    👤 Verify Biometrics &amp; Scan QR
                   </button>
-                </div>
-              </div>
-
-              <!-- Ultrasonic Receiver Active Audio Status Bar -->
-              <div id="ultrasonic-status-container" class="hidden" style="width:100%;max-width:340px;background:rgba(59,130,246,0.1);border:1px solid #3b82f6;border-radius:var(--radius-sm);padding:0.8rem;text-align:center;margin-top:0.8rem;">
-                <div style="font-size:0.85rem;font-weight:600;color:#60a5fa;" id="ultrasonic-status-text">
-                  🎙️ Auto-Listening for Classroom Ultrasonic Sound (~18.5kHz)...
-                </div>
-                <div class="progress-bar-bg" style="margin-top:0.4rem;height:6px;background:rgba(255,255,255,0.1);">
-                  <div class="progress-bar-fill" id="ultrasonic-pulse-bar" style="width:100%;background:#3b82f6;animation:pulse 1.5s infinite;"></div>
                 </div>
               </div>
 
               <!-- 30-Second Verification Expiry Timer Bar -->
               <div id="verification-timer-container" class="hidden" style="width:100%;max-width:340px;background:rgba(16,185,129,0.1);border:1px solid var(--accent-success);border-radius:var(--radius-sm);padding:0.6rem;text-align:center;margin-top:0.8rem;">
                 <div style="font-size:0.82rem;font-weight:600;color:var(--accent-success);" id="verification-timer-text">
-                  ⏱️ Biometrics Verified! Complete check-in within <span id="timer-seconds">30</span>s
+                  ⏱️ Biometrics Verified! Complete scan within <span id="timer-seconds">30</span>s
                 </div>
                 <div class="progress-bar-bg" style="margin-top:0.4rem;height:5px;">
                   <div class="progress-bar-fill" id="verification-progress-bar" style="width:100%;background:var(--accent-success);"></div>
                 </div>
               </div>
 
-              <!-- QR Reader Camera View (Step 2) -->
+              <!-- QR Reader Camera View -->
               <div id="qr-reader-container" class="hidden" style="width:100%;max-width:340px;text-align:center;">
                 <div id="qr-reader"></div>
                 <button type="button" class="btn btn-ghost btn-sm mt-1" id="btn-flip-qr-camera">🔄 Flip Camera</button>
@@ -214,7 +204,6 @@
     </div>
   </div>
 
-  <script src="/js/audioEngine.js"></script>
   <script src="/js/student.js"></script>
 </body>
 </html>

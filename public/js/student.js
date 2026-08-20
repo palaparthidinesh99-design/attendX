@@ -227,39 +227,16 @@ async function startBiometricScanWorkflow() {
     const verifyData = await verifyRes.json();
 
     if (verifyRes.ok && verifyData.verified) {
-      setScanStatus('✓ Biometrics Verified! 🎙️ Step 2: Listening for Classroom Near-Ultrasonic Sound (~18.5kHz)...', 'info');
-
-      const statusContainer = document.getElementById('ultrasonic-status-container');
-      const statusText = document.getElementById('ultrasonic-status-text');
-      if (statusContainer) statusContainer.classList.remove('hidden');
-      if (statusText) {
-        statusText.innerHTML = `🎙️ <strong style="color:#60a5fa;">Step 2: Listening &amp; Verifying Near-Ultrasonic Sound (~18.5kHz FSK)...</strong>`;
-      }
-
-      // Auto-start Ultrasonic Audio Listener
-      if (window.ultrasonicReceiver) {
-        window.ultrasonicReceiver.startListening(
-          (capturedToken) => {
-            if (statusText) {
-              statusText.innerHTML = `🔊 <span style="color:#10b981;font-weight:700;">✓ Near-Ultrasonic Classroom Sound Verified! (Token: ${capturedToken})</span>`;
-            }
-            setScanStatus(`🔊 Near-Ultrasonic Classroom Sound Verified! Token captured (${capturedToken}). Submit scan below.`, 'success');
-          },
-          (err) => {
-            console.warn('Ultrasonic listener warning:', err);
-          }
-        );
-      }
-
+      setScanStatus('✓ Biometric Identity Verified! Opening QR scanner camera (30s window active)…', 'success');
       document.getElementById('scan-prompt').classList.add('hidden');
       start30SecVerificationTimer();
       await openQRScannerCamera();
     } else {
-      setScanStatus('Touch ID verification failed: ' + (verifyData.error || 'Signature invalid'), 'error');
+      setScanStatus('Biometric verification failed: ' + (verifyData.error || 'Signature invalid'), 'error');
     }
   } catch (err) {
     console.error('startBiometricScanWorkflow error:', err);
-    setScanStatus('Touch ID verification error: ' + err.message, 'error');
+    setScanStatus('Biometric verification error: ' + err.message, 'error');
   }
 }
 
@@ -705,45 +682,11 @@ window.selectCalendarDate = selectCalendarDate;
 window.renderSidePanelDayDetails = renderSidePanelDayDetails;
 window.logout = logout;
 
-function toggleUltrasonicReceiver() {
-  const container = document.getElementById('ultrasonic-status-container');
-  const btn = document.getElementById('btn-listen-ultrasonic');
-  if (!window.ultrasonicReceiver) return;
-
-  if (window.ultrasonicReceiver.isListening) {
-    window.ultrasonicReceiver.stopListening();
-    if (container) container.classList.add('hidden');
-    if (btn) btn.textContent = '🎙️ Listen for Ultrasonic Audio Token (~18.5kHz)';
-  } else {
-    if (container) container.classList.remove('hidden');
-    if (btn) btn.textContent = '🛑 Stop Listening';
-    window.ultrasonicReceiver.startListening(
-      (token) => {
-        alert('🎙️ Ultrasonic token captured from classroom speaker!');
-      },
-      (err) => {
-        alert('Microphone permission required for ultrasonic token listener: ' + err.message);
-        if (container) container.classList.add('hidden');
-        if (btn) btn.textContent = '🎙️ Listen for Ultrasonic Audio Token (~18.5kHz)';
-      }
-    );
-  }
-}
-
 // ── Bind Event Listeners ────────────────────────────────────────────────
 function bindStudentEventListeners() {
-  document.getElementById('setup-touchid-btn')?.addEventListener('click', setupPasskey);
-  document.getElementById('setup-faceid-btn')?.addEventListener('click', setupPasskey);
   document.getElementById('setup-passkey-btn')?.addEventListener('click', setupPasskey);
-  document.getElementById('btn-start-biometric-scan')?.addEventListener('click', () => {
-    // Auto-start background ultrasonic microphone listening
-    const container = document.getElementById('ultrasonic-status-container');
-    if (container) container.classList.remove('hidden');
-    if (window.ultrasonicReceiver && !window.ultrasonicReceiver.isListening) {
-      window.ultrasonicReceiver.startListening(() => {}, () => {});
-    }
-    startBiometricScanWorkflow();
-  });
+  document.getElementById('setup-face-camera-btn')?.addEventListener('click', setupPasskey);
+  document.getElementById('btn-start-biometric-scan')?.addEventListener('click', startBiometricScanWorkflow);
   document.getElementById('btn-flip-qr-camera')?.addEventListener('click', flipQRCamera);
   document.getElementById('btn-reset-scanner')?.addEventListener('click', resetScanner);
   document.getElementById('btn-submit-manual-token')?.addEventListener('click', submitManualToken);
