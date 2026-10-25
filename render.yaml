@@ -2,7 +2,7 @@ services:
   # Backend API Web Service
   - type: web
     name: attendx-backend
-    env: node
+    runtime: node
     plan: free
     region: singapore
     rootDir: backend
@@ -19,13 +19,14 @@ services:
         sync: false
 
   # Frontend Static Site
-  - type: static_site
+  - type: web
     name: attendx-frontend
+    runtime: static
     plan: free
     region: singapore
     rootDir: frontend
     buildCommand: npm install && npm run build
-    publishDir: dist
+    staticPublishPath: ./dist
     routes:
       - type: rewrite
         source: /*
