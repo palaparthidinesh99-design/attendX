@@ -18,11 +18,10 @@ services:
       - key: JWT_SECRET
         sync: false
 
-  # Frontend Static Site (Render CDN - global, no region)
+  # Frontend Static Site (Render CDN - global, no region or plan)
   - type: web
     name: attendx-frontend
     runtime: static
-    plan: free
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: ./dist
