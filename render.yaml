@@ -24,14 +24,9 @@ services:
     plan: free
     region: singapore
     rootDir: frontend
-    publishDir: .
+    buildCommand: npm install && npm run build
+    publishDir: dist
     routes:
-      - type: rewrite
-        source: /student
-        destination: /student.html
-      - type: rewrite
-        source: /teacher
-        destination: /teacher.html
       - type: rewrite
         source: /*
         destination: /index.html

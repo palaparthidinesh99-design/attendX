@@ -1,8 +1,24 @@
 {
   "name": "attendx-frontend",
   "version": "1.0.0",
-  "description": "AttendX Frontend Web Client",
+  "description": "AttendX Frontend React Client",
+  "type": "module",
   "scripts": {
-    "start": "npx serve ."
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "canvas-confetti": "^1.9.4",
+    "html5-qrcode": "^2.3.8",
+    "lucide-react": "^1.61.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-router-dom": "^7.18.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "vite": "^8.3.5"
   }
 }

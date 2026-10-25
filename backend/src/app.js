@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
+const fs = require('fs');
 
 const { query } = require('./config/db');
 const { notFoundHandler, errorHandler } = require('./middlewares/error');
@@ -73,7 +74,12 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 
 // Static frontend serving
+const frontendDist = path.resolve(__dirname, '../../frontend/dist');
 const frontendPath = path.resolve(__dirname, '../../frontend');
+
+if (fs.existsSync(frontendDist)) {
+  app.use(express.static(frontendDist));
+}
 app.use(express.static(frontendPath));
 
 // ── Health Check Endpoint ───────────────────────────────────────────────────
@@ -110,8 +116,12 @@ app.use('/api/attendance', attendanceRoutes);
 
 // ── SPA Fallback (serve frontend index.html for non-API routes) ──────────────
 app.get(/^(?!\/api).*/, (req, res) => {
-  const indexFile = path.join(frontendPath, 'index.html');
-  res.sendFile(indexFile);
+  const distIndex = path.join(frontendDist, 'index.html');
+  const srcIndex = path.join(frontendPath, 'index.html');
+  if (fs.existsSync(distIndex)) {
+    return res.sendFile(distIndex);
+  }
+  res.sendFile(srcIndex);
 });
 
 // ── Error Handling ──────────────────────────────────────────────────────────
