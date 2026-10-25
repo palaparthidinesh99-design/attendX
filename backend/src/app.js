@@ -14,7 +14,7 @@ const attendanceRoutes = require('./routes/attendance');
 
 const app = express();
 
-// Trust reverse proxy headers (Render, Vercel, Railway, Nginx)
+// Trust reverse proxy headers (Render, Railway, Nginx)
 app.set('trust proxy', 1);
 
 // ── Security Headers ────────────────────────────────────────────────────────
@@ -74,9 +74,7 @@ app.use(express.json({ limit: '10mb' }));
 
 // Static frontend serving
 const frontendPath = path.resolve(__dirname, '../../frontend');
-const publicPath = path.resolve(__dirname, '../../public');
 app.use(express.static(frontendPath));
-app.use(express.static(publicPath));
 
 // ── Health Check Endpoint ───────────────────────────────────────────────────
 const healthCheckHandler = async (req, res) => {

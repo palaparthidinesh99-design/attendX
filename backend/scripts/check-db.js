@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { getPool, query } = require('../backend/src/config/db');
+const { getPool, query } = require('../src/config/db');
 
 async function checkPostgresConnection() {
   const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;

@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { getPool, query, initDB } = require('../backend/src/config/db');
+const { getPool, query, initDB } = require('../src/config/db');
 
 async function resetDatabase() {
   console.log('🧹 Resetting PostgreSQL database tables...');

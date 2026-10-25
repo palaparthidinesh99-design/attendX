@@ -242,13 +242,11 @@ npm run test:api
 
 ---
 
-## 8. Cloud Deployment (Render & Vercel)
+## 8. Cloud Deployment (Render)
 
-### Deploy to Render
-The repository includes a pre-configured native Node.js `render.yaml` manifest. Connect the GitHub repository in Render to deploy as a Web Service. Set your PostgreSQL `DATABASE_URL` in the environment settings.
-
-### Deploy Frontend to Vercel
-Connect the repository to Vercel. `vercel.json` serves the clean frontend static assets and routes automatically.
+The repository includes a pre-configured [`render.yaml`](render.yaml) blueprint:
+1. **Backend Web Service**: Native Node.js web service running `backend/` connected to PostgreSQL via `DATABASE_URL`.
+2. **Frontend Static Site**: Static site deployment serving `frontend/` assets with client-side routing.
 
 ---
 
