@@ -1,7 +1,7 @@
 // Central API utility
 
 export const API_BASE = (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
-  ? 'https://attendx-qnqb.onrender.com'
+  ? (import.meta.env.VITE_API_BASE_URL || 'https://attendx-qnqb.onrender.com')
   : '';
 
 export function getToken() {
