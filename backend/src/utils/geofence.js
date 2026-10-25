@@ -25,7 +25,6 @@ function withinBoundingBox(lat, lng, centerLat, centerLng, radiusMeters) {
 
 /**
  * Haversine formula — great-circle distance between two lat/lng points.
- * Only called after bounding-box pre-check passes.
  *
  * @returns {number} Distance in meters
  */
@@ -42,22 +41,19 @@ function haversineMeters(lat1, lng1, lat2, lng2) {
 
 /**
  * Combined geofence check: bounding-box first (O(1)), then Haversine.
- * Fail-fast: if bounding box rejects, we never run the trig.
  *
  * @param {number} studentLat
  * @param {number} studentLng
- * @param {object} session    - Mongoose Session document with .location and .radiusMeters
+ * @param {number} centerLat
+ * @param {number} centerLng
+ * @param {number} radiusMeters
  * @returns {boolean}
  */
-function isWithinRadius(studentLat, studentLng, session) {
-  const { lat: cLat, lng: cLng } = session.location;
-  const radius = session.radiusMeters || 50;
-
-  if (!withinBoundingBox(studentLat, studentLng, cLat, cLng, radius)) {
-    return false; // cheap rejection — skip trig entirely
+function isWithinRadius(studentLat, studentLng, centerLat, centerLng, radiusMeters = 50) {
+  if (!withinBoundingBox(studentLat, studentLng, centerLat, centerLng, radiusMeters)) {
+    return false;
   }
-
-  return haversineMeters(studentLat, studentLng, cLat, cLng) <= radius;
+  return haversineMeters(studentLat, studentLng, centerLat, centerLng) <= radiusMeters;
 }
 
 module.exports = { withinBoundingBox, haversineMeters, isWithinRadius };

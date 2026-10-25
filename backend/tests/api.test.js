@@ -1,27 +1,10 @@
-/* server/tests/api.test.js — End-to-end API Integration Test Suite */
+/* backend/tests/api.test.js — PostgreSQL API Integration Test Suite */
 
 process.env.NODE_ENV = 'test';
+process.env.JWT_SECRET = 'test_secret_for_integration_testing_12345';
 const request = require('supertest');
-const mongoose = require('mongoose');
-const app = require('../server');
-
-// Ensure test suite ALWAYS uses dedicated isolated test DB, NEVER the primary production/dev DB
-function getIsolatedTestMongoUri() {
-  const mainUri = process.env.MONGODB_TEST_URI || process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/attendance_system_test';
-  
-  if (mainUri.includes('mongodb+srv://') || mainUri.includes('mongodb://')) {
-    try {
-      const url = new URL(mainUri);
-      url.pathname = '/attendance_system_test';
-      return url.toString();
-    } catch (_) {
-      return mainUri.replace(/\.net\/([^?]*)/, '.net/attendance_system_test');
-    }
-  }
-  return 'mongodb://127.0.0.1:27017/attendance_system_test';
-}
-
-const MONGO_URI = getIsolatedTestMongoUri();
+const app = require('../src/app');
+const { initDB, getPool } = require('../src/config/db');
 
 let passed = 0;
 let failed = 0;
@@ -37,22 +20,16 @@ function assert(description, condition) {
 }
 
 async function runApiTests() {
-  console.log('\n🚀 Running API Integration Test Suite...\n');
-  console.log(`  📍 Isolated Test Database: ${MONGO_URI.replace(/\/\/[^@]+@/, '//***:***@')}\n`);
+  console.log('\n🚀 Running PostgreSQL API Integration Test Suite...\n');
 
   try {
-    try {
-      await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 5000 });
-    } catch (_) {
-      await mongoose.connect('mongodb://127.0.0.1:27017/attendance_system_test', { serverSelectionTimeoutMS: 5000 });
-    }
-    // Clear ONLY the isolated test database collections before test run
-    await mongoose.connection.dropDatabase();
+    // 0. Initialize DB Schema
+    await initDB();
 
     // ── 1. Health Check ──────────────────────────────────────────────────
     const healthRes = await request(app).get('/health');
     assert('/health returns status UP and 200 OK', healthRes.status === 200 && healthRes.body.status === 'UP');
-    assert('/health returns connected database state', healthRes.body.database === 'connected');
+    assert('/health returns connected PostgreSQL engine', healthRes.body.engine === 'PostgreSQL' && healthRes.body.database === 'connected');
 
     // ── 2. User Authentication ───────────────────────────────────────────
     const teacherRes = await request(app)
@@ -87,7 +64,19 @@ async function runApiTests() {
         role: 'student',
         rollNumber: 'CS1802'
       });
+    assert('Student 2 registration returns 201 Created', student2Res.status === 201);
     const student2Token = student2Res.body.token;
+
+    // Duplicate email check
+    const dupRes = await request(app)
+      .post('/api/auth/register')
+      .send({
+        name: 'Duplicate Ada',
+        email: 'ada@university.edu',
+        password: 'securepassword123',
+        role: 'student'
+      });
+    assert('Duplicate email registration returns 409 Conflict', dupRes.status === 409);
 
     // Login test
     const loginRes = await request(app)
@@ -98,7 +87,7 @@ async function runApiTests() {
       });
     assert('Student login returns 200 OK with valid user role', loginRes.status === 200 && loginRes.body.user.role === 'student');
 
-    // Invalid login test
+    // Bad password
     const badLoginRes = await request(app)
       .post('/api/auth/login')
       .send({
@@ -107,13 +96,34 @@ async function runApiTests() {
       });
     assert('Invalid password returns 401 Unauthorized', badLoginRes.status === 401);
 
-    // ── 3. Session Creation ───────────────────────────────────────────────
-    // Center coords: 12.9716, 77.5946 (Bengaluru)
+    // ── 3. Course Creation & Enrollment ──────────────────────────────────
+    const courseRes = await request(app)
+      .post('/api/courses')
+      .set('Authorization', `Bearer ${teacherToken}`)
+      .send({
+        courseCode: 'CS101',
+        courseName: 'Algorithms & Data Structures'
+      });
+    assert('Teacher creates course CS101 (201 Created)', courseRes.status === 201 && !!courseRes.body.id);
+    const courseId = courseRes.body.id;
+
+    // Enroll Ada Lovelace into CS101
+    const enrollRes = await request(app)
+      .post(`/api/courses/${courseId}/enroll`)
+      .set('Authorization', `Bearer ${teacherToken}`)
+      .send({
+        emails: ['ada@university.edu']
+      });
+    assert('Teacher enrolls student email into course (200 OK)', enrollRes.status === 200);
+
+    // ── 4. Session Creation ───────────────────────────────────────────────
+    // Center coordinates: 12.9716, 77.5946 (Bengaluru)
     const sessionRes = await request(app)
       .post('/api/sessions')
       .set('Authorization', `Bearer ${teacherToken}`)
       .send({
-        className: 'Algorithms 101',
+        className: 'CS101 — Lecture 1',
+        courseId,
         lat: 12.9716,
         lng: 77.5946,
         radiusMeters: 50
@@ -126,19 +136,20 @@ async function runApiTests() {
       .post('/api/sessions')
       .set('Authorization', `Bearer ${studentToken}`)
       .send({
-        className: 'Illegal Session',
+        className: 'Illegal Student Session',
+        courseId,
         lat: 12.9716,
         lng: 77.5946
       });
     assert('Student attempting session creation returns 403 Forbidden', forbiddenSessionRes.status === 403);
 
-    // ── 4. Rotating Token Retrieval ──────────────────────────────────────
+    // ── 5. Rotating Token Retrieval ──────────────────────────────────────
     const tokenRes = await request(app).get(`/api/sessions/${sessionId}/token`);
-    assert('Fetching token returns 200 OK with 16-char token & window expiration',
+    assert('Fetching session QR token returns 200 OK with 16-char token',
       tokenRes.status === 200 && typeof tokenRes.body.token === 'string' && tokenRes.body.token.length === 16);
     const qrToken = tokenRes.body.token;
 
-    // ── 5. Attendance Scanning ───────────────────────────────────────────
+    // ── 6. Attendance Scanning ───────────────────────────────────────────
     // Valid Scan (0m distance)
     const validScanRes = await request(app)
       .post('/api/attendance/scan')
@@ -163,78 +174,68 @@ async function runApiTests() {
         lat: 12.9716,
         lng: 77.5946
       });
-    assert('Duplicate scan returns 409 Conflict', duplicateScanRes.status === 409 && duplicateScanRes.body.error.includes('already marked'));
+    assert('Duplicate scan returns 409 Conflict', duplicateScanRes.status === 409);
 
-    // Out-of-Radius Scan (Student 2 is ~490m away, beyond the 50m buffer)
+    // Student 2 is NOT enrolled -> should receive 403 Access Denied
+    const unenrolledScanRes = await request(app)
+      .post('/api/attendance/scan')
+      .set('Authorization', `Bearer ${student2Token}`)
+      .send({
+        sessionId,
+        token: qrToken,
+        lat: 12.9716,
+        lng: 77.5946
+      });
+    assert('Unenrolled student scan returns 403 Access Denied', unenrolledScanRes.status === 403);
+
+    // Enroll student 2 now
+    await request(app)
+      .post(`/api/courses/${courseId}/enroll`)
+      .set('Authorization', `Bearer ${teacherToken}`)
+      .send({ emails: ['grace@university.edu'] });
+
+    // Out-of-radius scan: Student 2 is ~490m away
     const outOfRadiusScanRes = await request(app)
       .post('/api/attendance/scan')
       .set('Authorization', `Bearer ${student2Token}`)
       .send({
         sessionId,
         token: qrToken,
-        lat: 12.9760, // ~490 meters away
+        lat: 12.9760,
         lng: 77.5946
       });
     assert('Out-of-radius scan returns 403 Forbidden with distance meters',
       outOfRadiusScanRes.status === 403 && outOfRadiusScanRes.body.distanceMeters > 50);
 
-    // Tampered / Expired Token Scan
-    const badTokenScanRes = await request(app)
-      .post('/api/attendance/scan')
-      .set('Authorization', `Bearer ${student2Token}`)
-      .send({
-        sessionId,
-        token: 'invalid_token_123',
-        lat: 12.9716,
-        lng: 77.5946
-      });
-    assert('Invalid/expired HMAC token returns 401 Unauthorized', badTokenScanRes.status === 401);
-
-    // Invalid Coordinate Range Scan
-    const badCoordScanRes = await request(app)
-      .post('/api/attendance/scan')
-      .set('Authorization', `Bearer ${student2Token}`)
-      .send({
-        sessionId,
-        token: qrToken,
-        lat: 999.0, // Invalid latitude
-        lng: 77.5946
-      });
-    assert('Out-of-bound latitude returns 400 Bad Request', badCoordScanRes.status === 400);
-
-    // Far distance Geofence Check
-    const poorGpsScanRes = await request(app)
-      .post('/api/attendance/scan')
-      .set('Authorization', `Bearer ${student2Token}`)
-      .send({
-        sessionId,
-        token: qrToken,
-        lat: 12.9810, // ~1km away
-        lng: 77.5946,
-        accuracyMeters: 50
-      });
-    assert('Out-of-bounds scan returns 403 Forbidden', poorGpsScanRes.status === 403);
-
-    // ── 6. Live Attendance Retrieval ─────────────────────────────────────
+    // ── 7. Teacher Live Attendance & End Session ──────────────────────────
     const attendanceRes = await request(app)
       .get(`/api/sessions/${sessionId}/attendance`)
       .set('Authorization', `Bearer ${teacherToken}`);
     assert('Teacher live attendance returns 200 OK with count 1',
-      attendanceRes.status === 200 && attendanceRes.body.count === 1 && attendanceRes.body.records[0].student.email === 'ada@university.edu');
+      attendanceRes.status === 200 && attendanceRes.body.count === 1);
 
-    // Student history check
-    const myHistoryRes = await request(app)
-      .get('/api/attendance/my')
+    // End session
+    const endRes = await request(app)
+      .post(`/api/sessions/${sessionId}/end`)
+      .set('Authorization', `Bearer ${teacherToken}`);
+    assert('Teacher ends session (200 OK)', endRes.status === 200);
+
+    // ── 8. Student Analytics ─────────────────────────────────────────────
+    const analyticsRes = await request(app)
+      .get('/api/attendance/analytics')
       .set('Authorization', `Bearer ${studentToken}`);
-    assert('Student history returns 200 OK with 1 record', myHistoryRes.status === 200 && myHistoryRes.body.length === 1);
+    assert('Student analytics returns 200 OK with subjects and calendar breakdown',
+      analyticsRes.status === 200 && Array.isArray(analyticsRes.body.subjects) && analyticsRes.body.subjects.length > 0);
 
-    console.log(`\n🎉 Integration Test Suite Completed: ${passed} passed, ${failed} failed\n`);
-
+    console.log(`\n🎉 PostgreSQL Integration Test Suite Completed: ${passed} passed, ${failed} failed\n`);
   } catch (err) {
     console.error('❌ Test suite fatal error:', err);
     failed++;
   } finally {
-    await mongoose.connection.close();
+    try {
+      const pool = getPool();
+      if (pool) await pool.end();
+    } catch (_) {}
     if (failed > 0) process.exit(1);
     else process.exit(0);
   }

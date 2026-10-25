@@ -1,9 +1,9 @@
 const jwt = require('jsonwebtoken');
-const User = require('../models/User');
+const { query } = require('../config/db');
 
 /**
  * Middleware that verifies JWT from Authorization header.
- * Attaches req.user = { id, role, name, email } on success.
+ * Attaches req.user = { id, _id, role, name, email } on success.
  */
 async function authenticate(req, res, next) {
   try {
@@ -19,13 +19,27 @@ async function authenticate(req, res, next) {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const payload = jwt.verify(token, process.env.JWT_SECRET || 'dev_fallback_secret_key_12345');
 
-    // Lightweight check — only fetch to confirm user still exists
-    const user = await User.findById(payload.id).select('_id role name email');
-    if (!user) return res.status(401).json({ error: 'User not found' });
+    // Confirm user exists in PostgreSQL
+    const result = await query(
+      'SELECT id, name, email, role FROM users WHERE id = $1',
+      [payload.id]
+    );
 
-    req.user = user;
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    const user = result.rows[0];
+    req.user = {
+      id: user.id,
+      _id: user.id, // For backward compatibility with existing frontend code
+      name: user.name,
+      email: user.email,
+      role: user.role
+    };
+
     next();
   } catch (err) {
     if (err.name === 'JsonWebTokenError' || err.name === 'TokenExpiredError') {
@@ -41,7 +55,7 @@ async function authenticate(req, res, next) {
  */
 function requireRole(role) {
   return (req, res, next) => {
-    const userRole = String(req.user.role || '').toLowerCase();
+    const userRole = String(req.user?.role || '').toLowerCase();
     const targetRole = String(role || '').toLowerCase();
     if (userRole !== targetRole) {
       return res.status(403).json({ error: `Access restricted to ${role}s` });

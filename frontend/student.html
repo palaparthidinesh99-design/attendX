@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>AttendX — Student Dashboard</title>
+  <meta name="description" content="Mark attendance with QR code, GPS verification, facial liveness, and track subject-wise percentage and calendar." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎯</text></svg>">
+  <link rel="stylesheet" href="/css/style.css" />
+  <script src="https://unpkg.com/@simplewebauthn/browser@10.0.0/dist/bundle/index.umd.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    .student-layout {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.25rem;
+      padding: 1rem 0 2.5rem;
+      align-items: start;
+    }
+
+    @media (min-width: 960px) {
+      .student-layout { grid-template-columns: 360px 1fr; }
+    }
+
+    .scanner-section {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    #qr-reader { width: 100% !important; max-width: 340px; }
+    #qr-reader > div:first-child { border-radius: var(--radius-sm) !important; }
+    #qr-reader img { display: none !important; }
+
+    .subject-card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .progress-bar-bg {
+      width: 100%;
+      height: 6px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 3px;
+      margin-top: 0.5rem;
+      overflow: hidden;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.3s;
+    }
+  </style>
+</head>
+<body class="page">
+  <!-- Navbar -->
+  <nav class="navbar">
+    <a href="/" class="navbar-brand">
+      <div class="navbar-logo">🎯</div>
+      <span class="navbar-brand-name">Attend<span>X</span></span>
+    </a>
+    <div class="navbar-actions">
+      <div class="user-pill">
+        <span id="nav-name">Student</span>
+        <span class="role-badge student">Student</span>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="logout-btn">Sign Out</button>
+    </div>
+  </nav>
+
+  <div class="page" style="position:relative;z-index:1;">
+    <div class="container">
+      <div class="student-layout">
+
+        <!-- LEFT PANEL: 3-Layer Security (Biometrics + Rotating Token + GPS Geofence) -->
+        <div>
+          <!-- Biometric Passkey & Camera Face Setup Card -->
+          <div class="card mb-2" id="card-passkey-setup">
+            <div class="section-header" style="margin-bottom:0.5rem;">
+              <div>
+                <h3>🔑 Biometric Identity Setup</h3>
+                <p style="font-size:0.8rem;">Hardware Passkey or In-App Camera Face Scan</p>
+              </div>
+              <span id="passkey-status-badge" class="badge badge-red">Not Registered</span>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.5rem;">
+              <button type="button" class="btn btn-primary btn-sm" id="setup-passkey-btn">
+                👆 Register Hardware Touch ID / Face ID
+              </button>
+              <button type="button" class="btn btn-secondary btn-sm" id="setup-face-camera-btn">
+                👤 Register In-App Camera Face Scan
+              </button>
+            </div>
+          </div>
+
+          <!-- Attendance Verification & Camera QR Scanner Card -->
+          <div class="card">
+            <div class="scanner-section">
+              <div id="scan-prompt" style="text-align:center;">
+                <h2>Mark Attendance</h2>
+                <p style="font-size:0.82rem;margin-top:0.2rem;" id="scan-prompt-subtext">3-Layer Protection: Biometrics + 15s Rotating Token + GPS Geofence</p>
+                
+                <div style="display:flex;flex-direction:column;gap:0.6rem;margin-top:0.8rem;width:100%;max-width:320px;">
+                  <button type="button" class="btn btn-primary btn-lg" id="btn-start-biometric-scan">
+                    👤 Verify Biometrics &amp; Scan QR
+                  </button>
+                </div>
+              </div>
+
+              <!-- 30-Second Verification Expiry Timer Bar -->
+              <div id="verification-timer-container" class="hidden" style="width:100%;max-width:340px;background:rgba(16,185,129,0.1);border:1px solid var(--accent-success);border-radius:var(--radius-sm);padding:0.6rem;text-align:center;margin-top:0.8rem;">
+                <div style="font-size:0.82rem;font-weight:600;color:var(--accent-success);" id="verification-timer-text">
+                  ⏱️ Biometrics Verified! Complete scan within <span id="timer-seconds">30</span>s
+                </div>
+                <div class="progress-bar-bg" style="margin-top:0.4rem;height:5px;">
+                  <div class="progress-bar-fill" id="verification-progress-bar" style="width:100%;background:var(--accent-success);"></div>
+                </div>
+              </div>
+
+              <!-- QR Reader Camera View -->
+              <div id="qr-reader-container" class="hidden" style="width:100%;max-width:340px;text-align:center;">
+                <div id="qr-reader"></div>
+                <button type="button" class="btn btn-ghost btn-sm mt-1" id="btn-flip-qr-camera">🔄 Flip Camera</button>
+              </div>
+
+              <div id="scan-status" style="width:100%;max-width:340px;"></div>
+
+              <!-- Success Overlay -->
+              <div id="success-view" class="hidden" style="width:100%;text-align:center;padding:1.5rem 0;">
+                <div style="width:52px;height:52px;background:var(--accent-success);border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:1.75rem;color:white;margin-bottom:0.6rem;box-shadow:0 0 16px rgba(16,185,129,0.5);">
+                  ✓
+                </div>
+                <h3>Attendance Marked!</h3>
+                <p id="success-detail" style="margin-top:0.2rem;"></p>
+                <div id="success-meta" class="mt-2" style="display:flex;gap:0.4rem;justify-content:center;flex-wrap:wrap;"></div>
+                <button type="button" class="btn btn-ghost btn-sm mt-3" id="btn-reset-scanner">Scan Another Code</button>
+              </div>
+
+            </div>
+
+            <!-- Manual Token Fallback -->
+            <div style="border-top:1px solid var(--border);margin-top:1.25rem;padding-top:1rem;">
+              <label class="form-label" for="manual-token">Manual Token Entry</label>
+              <div style="display:flex;gap:0.5rem;">
+                <input class="form-input" type="text" id="manual-token" placeholder='Paste QR Code Payload...' style="font-size:0.8rem;" />
+                <button type="button" class="btn btn-ghost btn-sm" id="btn-submit-manual-token">Submit</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT PANEL: Course Attendance Summary -->
+        <div>
+          <!-- 1. Subject-wise Percentage & Attendance Stats -->
+          <div class="card">
+            <div class="section-header">
+              <div>
+                <h2>Course Attendance Summary</h2>
+                <p>Enrolled course stats &amp; percentage overview</p>
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm" id="btn-refresh-analytics">↻ Refresh</button>
+            </div>
+
+            <div id="subject-stats-list">
+              <div class="empty-state">
+                <p>Loading course statistics…</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/student.js"></script>
+</body>
+</html>

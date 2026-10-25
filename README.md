@@ -5,8 +5,8 @@
 [![Live Demo](https://img.shields.io/badge/Live_Demo-Render-brightgreen?style=for-the-badge&logo=render)](https://attendx.onrender.com)
 [![GitHub Code](https://img.shields.io/badge/GitHub-Repository-blue?style=for-the-badge&logo=github)](https://github.com/palaparthidinesh99-design/attendX)
 [![Node.js](https://img.shields.io/badge/Node.js-v20+-green?style=for-the-badge&logo=nodedotjs)](https://nodejs.org)
-[![MongoDB](https://img.shields.io/badge/MongoDB-Atlas_Cloud-green?style=for-the-badge&logo=mongodb)](https://www.mongodb.com/atlas)
-[![Tests](https://img.shields.io/badge/Tests-29%2F29_Passing-brightgreen?style=for-the-badge)](file:///Users/dinesh/Documents/projects/attendence-proxy/server/tests/api.test.js)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue?style=for-the-badge&logo=postgresql)](https://www.postgresql.org)
+[![Tests](https://img.shields.io/badge/Tests-20%2F20_Passing-brightgreen?style=for-the-badge)](file:///Users/dinesh/Documents/projects/attendence-proxy/backend/tests/api.test.js)
 
 ---
 
@@ -118,45 +118,49 @@ In academic institutions, traditional attendance methods suffer from severe secu
 
 ```
 attendence-proxy/
-├── server/                    # Node.js + Express Backend Infrastructure
-│   ├── middleware/
-│   │   └── auth.js            # JWT verification & role authorization guards
-│   ├── models/
-│   │   ├── User.js            # User schema & WebAuthn device credentials
-│   │   ├── Course.js          # Course schema & student roster lists
-│   │   ├── Session.js         # Active session model with HMAC secrets
-│   │   └── Attendance.js      # Attendance ledger with IST timestamps & distance
-│   ├── routes/
-│   │   ├── auth.js            # Passkey registration & authentication endpoints
-│   │   ├── courses.js         # Course management & IST CSV export routes
-│   │   ├── sessions.js        # Session rotation & live check-in counters
-│   │   └── attendance.js     # Geofenced check-in submission & analytics
-│   ├── utils/
-│   │   ├── token.js           # 15s rotating HMAC SHA-256 token generator
-│   │   ├── token.test.js      # Unit test suite for token rotation & drift
-│   │   ├── geofence.js        # Haversine distance & bounding-box calculation
-│   │   └── geofence.test.js   # Unit test suite for geofencing math
+├── backend/                   # Node.js + Express + PostgreSQL Backend
+│   ├── src/
+│   │   ├── config/
+│   │   │   └── db.js          # PostgreSQL Connection Pool & Schema Bootstrap
+│   │   ├── controllers/
+│   │   │   ├── authController.js       # Register, Login & WebAuthn Controller
+│   │   │   ├── courseController.js     # Courses, Enrollment & CSV Export
+│   │   │   ├── sessionController.js    # 15s Rotating QR Sessions
+│   │   │   └── attendanceController.js # Geofence & QR Validation
+│   │   ├── middlewares/
+│   │   │   ├── auth.js        # JWT verification & role authorization guards
+│   │   │   └── error.js       # Central error & 404 handler
+│   │   ├── routes/
+│   │   │   ├── auth.js        # Auth API endpoints
+│   │   │   ├── courses.js     # Course management routes
+│   │   │   ├── sessions.js    # Session & token routes
+│   │   │   └── attendance.js  # QR scan & analytics routes
+│   │   ├── utils/
+│   │   │   ├── token.js       # 15s rotating HMAC SHA-256 token generator
+│   │   │   └── geofence.js    # Haversine distance & bounding-box calculation
+│   │   ├── app.js             # Express application configuration
+│   │   └── server.js          # Server entry point & startup listener
 │   ├── tests/
-│   │   └── api.test.js        # End-to-end API integration test suite (17 tests)
-│   └── server.js              # Server entry point & MongoDB Atlas connector
-├── public/                    # Solid Dark Frontend Application
+│   │   └── api.test.js        # PostgreSQL integration test suite (20 tests)
+│   └── package.json           # Backend package configuration
+├── frontend/                  # Solid Dark Frontend Web Client
 │   ├── css/
-│   │   └── style.css          # Theme tokens, mobile queries & calendar styling
+│   │   └── style.css          # Theme tokens, mobile queries & styling
 │   ├── js/
 │   │   ├── auth.js            # Auth UI controller
 │   │   ├── teacher.js         # Teacher dashboard, 100ms QR loop & live feed
-│   │   └── student.js         # Student Touch ID Passkey verification & 30s timer
+│   │   └── student.js         # Student Touch ID Passkey & 30s timer
 │   ├── index.html             # Login & Registration landing page
 │   ├── student.html           # Student attendance & calendar dashboard
-│   └── teacher.html           # Teacher live session management view
-├── scripts/                   # System Maintenance & Stress Test Utilities
-│   ├── reset-db.js            # Database wipe tool
-│   ├── check-db.js            # Atlas cloud connection health tool
-│   └── concurrency-test.js    # 200-student concurrent check-in stress tester
-├── Dockerfile                 # Multi-stage production container image
-├── docker-compose.yml         # Container orchestration manifest
-├── render.yaml                # Render cloud deployment specification
-└── package.json               # Package dependencies & npm scripts
+│   ├── teacher.html           # Teacher live session management view
+│   └── package.json           # Frontend package configuration
+├── scripts/                   # System Maintenance & Check Utilities
+│   ├── reset-db.js            # PostgreSQL database reset tool
+│   └── check-db.js            # PostgreSQL connection health check tool
+├── attendx_schema_simple.sql  # Clean, practical PostgreSQL database schema
+├── schema.sql                 # SQL schema file
+├── render.yaml                # Native Node.js Render cloud deployment manifest
+└── package.json               # Root npm orchestration scripts
 ```
 
 ---
@@ -167,42 +171,28 @@ attendence-proxy/
 | :--- | :--- | :--- | :--- |
 | `POST` | `/api/auth/register` | Public | Register new Teacher or Student account |
 | `POST` | `/api/auth/login` | Public | Authenticate user & receive JWT token |
-| `POST` | `/api/auth/webauthn/register-options` | Student | Issue WebAuthn Passkey registration challenge |
-| `POST` | `/api/auth/webauthn/register-verify` | Student | Verify & store Passkey public key |
-| `POST` | `/api/auth/webauthn/authenticate-options` | Student | Issue WebAuthn authentication challenge |
-| `POST` | `/api/auth/webauthn/authenticate-verify` | Student | Verify Passkey signature & unlock 30s scan window |
-| `POST` | `/api/courses` | Teacher | Create new course with enrolled student emails |
+| `GET` | `/api/auth/webauthn-status` | Student | Verify Passkey registration status |
+| `POST` | `/api/courses` | Teacher | Create new course |
+| `GET` | `/api/courses` | Authenticated | List courses (teacher's created or student's enrolled) |
+| `GET` | `/api/courses/:id/students` | Teacher | Course roster & enrolled students list |
+| `POST` | `/api/courses/:id/enroll` | Teacher | Enroll student emails into course |
+| `POST` | `/api/courses/join` | Student | Join course via course code or ID |
 | `GET` | `/api/courses/:id/export-csv` | Teacher | Stream IST-formatted attendance CSV report |
 | `POST` | `/api/sessions` | Teacher | Launch attendance session with GPS origin & radius |
-| `GET` | `/api/sessions/:id/token` | Teacher | Fetch active 15s rotating HMAC SHA-256 token |
+| `GET` | `/api/sessions/:id/token` | Public/Scanner | Fetch active 15s rotating HMAC SHA-256 token |
+| `GET` | `/api/sessions/:id/attendance` | Teacher | Live session attendance feed |
+| `POST` | `/api/sessions/:id/end` | Teacher | End active session |
 | `POST` | `/api/attendance/scan` | Student | Submit biometric-verified GPS & QR check-in |
-| `GET` | `/api/attendance/student-analytics` | Student | Fetch subject percentages & calendar records |
+| `GET` | `/api/attendance/analytics` | Student | Fetch subject percentages & calendar records |
 | `GET` | `/health` | Public | System status check & database connectivity probe |
 
 ---
 
-## 7. High-Concurrency Benchmark (200 Students in 1.7s)
-
-```
-==============================================================================
-           ATTENDX HIGH-CONCURRENCY STRESS TEST BENCHMARK RESULTS
-==============================================================================
-  Concurrent Students:        200 Parallel Workers
-  Total HTTP Submissions:    200 Requests Sent Simultaneously
-  Time Elapsed:              1,742 ms (1.74 seconds)
-  Successful Check-Ins:      200 / 200 (100% Pass Rate)
-  Failed / Rejected Requests: 0
-  Database Engine:           MongoDB Atlas Cloud
-==============================================================================
-```
-
----
-
-## 8. Local Installation & Setup Guide
+## 7. Local Installation & Setup Guide
 
 ### Prerequisites
 - **Node.js**: v18.0.0 or higher
-- **MongoDB**: Local MongoDB instance or MongoDB Atlas connection string
+- **PostgreSQL**: Local PostgreSQL 14+ or cloud PostgreSQL (Render, Neon, Supabase, Railway)
 
 ### Step 1: Clone Repository & Install Dependencies
 ```bash
@@ -211,13 +201,20 @@ cd attendX
 npm install
 ```
 
-### Step 2: Configure Environment Variables
+### Step 2: Initialize PostgreSQL Database
+Run the provided practical schema:
+```bash
+psql -U postgres -d attendx -f attendx_schema_simple.sql
+```
+
+### Step 3: Configure Environment Variables
 Create a `.env` file in the root directory:
 ```env
 PORT=3000
-MONGODB_URI=mongodb+srv://<username>:<password>@cluster0.mongodb.net/attendance_system
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/attendx
 JWT_SECRET=your_jwt_secret_key_here
 NODE_ENV=development
+```
 ```
 
 ### Step 3: Start Application Server
@@ -245,25 +242,13 @@ npm run test:api
 
 ---
 
-## 10. Cloud Deployment (Docker, Compose & Render)
-
-### Docker Deployment
-```bash
-# Build production container image
-docker build -t attendx:latest .
-
-# Run container locally on port 3000
-docker run -d -p 3000:3000 --env-file .env attendx:latest
-```
-
-### Local Multi-Container Orchestration
-```bash
-# Spin up Node.js app and MongoDB via Docker Compose
-docker-compose up --build -d
-```
+## 8. Cloud Deployment (Render & Vercel)
 
 ### Deploy to Render
-The repository includes a pre-configured `render.yaml` manifest. Connect the GitHub repository in Render to deploy as a Web Service.
+The repository includes a pre-configured native Node.js `render.yaml` manifest. Connect the GitHub repository in Render to deploy as a Web Service. Set your PostgreSQL `DATABASE_URL` in the environment settings.
+
+### Deploy Frontend to Vercel
+Connect the repository to Vercel. `vercel.json` serves the clean frontend static assets and routes automatically.
 
 ---
 

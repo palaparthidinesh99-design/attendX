@@ -12,7 +12,7 @@ function currentTimeWindow() {
  * Generates a short HMAC-SHA256 token for the given session + time window.
  * Token is deterministic — no DB state needed to regenerate it.
  *
- * @param {string} sessionId  - MongoDB ObjectId as string
+ * @param {string} sessionId  - UUID string
  * @param {string} secret     - Per-session random secret
  * @param {number} timeWindow - Optional override; defaults to current window
  * @returns {string} 16-char hex token
@@ -29,7 +29,7 @@ function generateToken(sessionId, secret, timeWindow = currentTimeWindow()) {
  * Verifies a submitted token against the current and previous time window
  * (gives ~30s of tolerance for network latency / clock skew).
  *
- * @param {string} sessionId      - MongoDB ObjectId as string
+ * @param {string} sessionId      - UUID string
  * @param {string} secret         - Per-session random secret
  * @param {string} submittedToken - Token from the student's scanned QR
  * @returns {boolean}
