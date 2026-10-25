@@ -240,6 +240,36 @@ async function runApiTests() {
     assert('/api/auth/webauthn/register-options generates challenge and 200 OK',
       regOptsRes.status === 200 && !!regOptsRes.body.challenge);
 
+    // ── 10. Attendance Matrix & Session Downloads ────────────────────────
+    const matrixRes = await request(app)
+      .get(`/api/courses/${courseId}/attendance-matrix`)
+      .set('Authorization', `Bearer ${teacherToken}`);
+    assert('Course attendance matrix returns 200 OK with students and sessions',
+      matrixRes.status === 200 && Array.isArray(matrixRes.body.students) && Array.isArray(matrixRes.body.sessions));
+
+    const courseSessionsRes = await request(app)
+      .get(`/api/courses/${courseId}/sessions`)
+      .set('Authorization', `Bearer ${teacherToken}`);
+    assert('Course sessions list returns 200 OK with sessions count',
+      courseSessionsRes.status === 200 && Array.isArray(courseSessionsRes.body.sessions));
+
+    const courseCsvRes = await request(app)
+      .get(`/api/courses/${courseId}/export-csv`)
+      .set('Authorization', `Bearer ${teacherToken}`);
+    assert('Course CSV matrix download returns P/A table without distance/time',
+      courseCsvRes.status === 200 &&
+      courseCsvRes.text.includes('Total Present') &&
+      courseCsvRes.text.includes('P') &&
+      !courseCsvRes.text.includes('Distance (m)'));
+
+    const sessionCsvRes = await request(app)
+      .get(`/api/sessions/${sessionId}/export-csv`)
+      .set('Authorization', `Bearer ${teacherToken}`);
+    assert('Single session CSV download returns enrolled students with P/A',
+      sessionCsvRes.status === 200 &&
+      sessionCsvRes.text.includes('P') &&
+      !sessionCsvRes.text.includes('Distance (m)'));
+
     console.log(`\n🎉 PostgreSQL Integration Test Suite Completed: ${passed} passed, ${failed} failed\n`);
   } catch (err) {
     console.error('❌ Test suite fatal error:', err);

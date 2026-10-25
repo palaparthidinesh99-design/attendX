@@ -252,7 +252,117 @@ async function joinCourse(req, res, next) {
   }
 }
 
-// GET /api/courses/:id/export-csv — Streamed CSV export for course
+// GET /api/courses/:id/attendance-matrix — View full attendance table (Names on rows, session dates on columns, P or A)
+async function getCourseAttendanceMatrix(req, res, next) {
+  try {
+    const courseRes = await query(
+      'SELECT id, name, course_code FROM courses WHERE id = $1 AND teacher_id = $2',
+      [req.params.id, req.user.id]
+    );
+
+    if (courseRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Course not found or unauthorized' });
+    }
+
+    const course = courseRes.rows[0];
+
+    // 1. All sessions for course ordered chronologically
+    const sessionsRes = await query(
+      'SELECT id, starts_at, ends_at, is_active FROM sessions WHERE course_id = $1 ORDER BY starts_at ASC',
+      [course.id]
+    );
+
+    const dateCounts = {};
+    const sessions = sessionsRes.rows.map((s) => {
+      const dStr = new Date(s.starts_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      dateCounts[dStr] = (dateCounts[dStr] || 0) + 1;
+      return {
+        id: s.id,
+        startsAt: s.starts_at,
+        endsAt: s.ends_at,
+        isActive: s.is_active,
+        date: dStr
+      };
+    });
+
+    const seenDates = {};
+    const formattedSessions = sessions.map((s) => {
+      seenDates[s.date] = (seenDates[s.date] || 0) + 1;
+      const label = dateCounts[s.date] > 1 ? `${s.date} (#${seenDates[s.date]})` : s.date;
+      return { ...s, label };
+    });
+
+    // 2. All enrolled students
+    const studentsRes = await query(
+      `SELECT DISTINCT u.id, u.name, u.email
+       FROM users u
+       LEFT JOIN enrollments e ON e.student_id = u.id AND e.course_id = $1
+       LEFT JOIN attendance a ON a.student_id = u.id
+       LEFT JOIN sessions s ON a.session_id = s.id AND s.course_id = $1
+       WHERE e.course_id = $1 OR s.course_id = $1
+       ORDER BY u.name ASC`,
+      [course.id]
+    );
+
+    // 3. All attendance records
+    const attRes = await query(
+      `SELECT a.session_id, a.student_id, a.status
+       FROM attendance a
+       JOIN sessions s ON a.session_id = s.id
+       WHERE s.course_id = $1`,
+      [course.id]
+    );
+
+    const attendanceMap = new Set();
+    for (const row of attRes.rows) {
+      if (row.status === 'present') {
+        attendanceMap.add(`${row.session_id}_${row.student_id}`);
+      }
+    }
+
+    // 4. Assemble student rows
+    const students = studentsRes.rows.map((st) => {
+      let presentCount = 0;
+      const records = {};
+      for (const sess of formattedSessions) {
+        const isPresent = attendanceMap.has(`${sess.id}_${st.id}`);
+        if (isPresent) {
+          presentCount++;
+          records[sess.id] = 'P';
+        } else {
+          records[sess.id] = 'A';
+        }
+      }
+
+      const total = formattedSessions.length;
+      const percentage = total > 0 ? Math.round((presentCount / total) * 100) : 100;
+
+      return {
+        id: st.id,
+        name: st.name,
+        email: st.email,
+        records,
+        presentCount,
+        totalSessions: total,
+        percentage
+      };
+    });
+
+    res.json({
+      course: {
+        id: course.id,
+        name: course.name,
+        courseCode: course.course_code
+      },
+      sessions: formattedSessions,
+      students
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/courses/:id/export-csv — Full Attendance Register Matrix CSV (Names on rows, Dates as columns, P or A)
 async function exportCourseCSV(req, res, next) {
   try {
     const courseRes = await query(
@@ -266,26 +376,92 @@ async function exportCourseCSV(req, res, next) {
 
     const course = courseRes.rows[0];
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=attendance_${course.course_code}.csv`);
-    res.write('Student Name,Student Email,Status,Marked At (IST),Distance (m)\n');
+    // 1. Fetch all sessions for this course ordered chronologically
+    const sessionsRes = await query(
+      'SELECT id, starts_at, ends_at FROM sessions WHERE course_id = $1 ORDER BY starts_at ASC',
+      [course.id]
+    );
+    const sessions = sessionsRes.rows;
 
-    const result = await query(
-      `SELECT a.status, a.marked_at, a.distance_meters, u.name, u.email
+    // 2. Fetch all enrolled students
+    const studentsRes = await query(
+      `SELECT DISTINCT u.id, u.name, u.email
+       FROM users u
+       LEFT JOIN enrollments e ON e.student_id = u.id AND e.course_id = $1
+       LEFT JOIN attendance a ON a.student_id = u.id
+       LEFT JOIN sessions s ON a.session_id = s.id AND s.course_id = $1
+       WHERE e.course_id = $1 OR s.course_id = $1
+       ORDER BY u.name ASC`,
+      [course.id]
+    );
+    const students = studentsRes.rows;
+
+    // 3. Fetch all attendance records
+    const attRes = await query(
+      `SELECT a.session_id, a.student_id, a.status
        FROM attendance a
-       JOIN users u ON a.student_id = u.id
        JOIN sessions s ON a.session_id = s.id
-       WHERE s.course_id = $1
-       ORDER BY a.marked_at DESC`,
+       WHERE s.course_id = $1`,
       [course.id]
     );
 
-    for (const row of result.rows) {
-      const name = `"${(row.name || '').replace(/"/g, '""')}"`;
-      const email = `"${(row.email || '').replace(/"/g, '""')}"`;
-      const time = row.marked_at ? new Date(row.marked_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'N/A';
-      const dist = row.distance_meters != null ? `${row.distance_meters}m` : 'N/A';
-      res.write(`${name},${email},${row.status},"${time}","${dist}"\n`);
+    const attendanceMap = new Set();
+    for (const row of attRes.rows) {
+      if (row.status === 'present') {
+        attendanceMap.add(`${row.session_id}_${row.student_id}`);
+      }
+    }
+
+    // 4. Generate column headers for dates
+    const dateCounts = {};
+    const sessionDateLabels = sessions.map((sess) => {
+      const dStr = new Date(sess.starts_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      dateCounts[dStr] = (dateCounts[dStr] || 0) + 1;
+      return { id: sess.id, dateStr: dStr };
+    });
+
+    const seenDates = {};
+    const dateHeaders = sessionDateLabels.map((item) => {
+      seenDates[item.dateStr] = (seenDates[item.dateStr] || 0) + 1;
+      if (dateCounts[item.dateStr] > 1) {
+        return `${item.dateStr} (#${seenDates[item.dateStr]})`;
+      }
+      return item.dateStr;
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=attendance_${course.course_code}_register.csv`);
+
+    // Write CSV Header
+    if (dateHeaders.length > 0) {
+      res.write(`Student Name,Student Email,${dateHeaders.join(',')},Total Present,Total Sessions,Percentage\n`);
+    } else {
+      res.write('Student Name,Student Email,Total Present,Total Sessions,Percentage\n');
+    }
+
+    // Write Student Rows
+    for (const student of students) {
+      const name = `"${(student.name || 'Unknown').replace(/"/g, '""')}"`;
+      const email = `"${(student.email || '').replace(/"/g, '""')}"`;
+
+      let presentCount = 0;
+      const statusCols = sessions.map((sess) => {
+        const isPresent = attendanceMap.has(`${sess.id}_${student.id}`);
+        if (isPresent) {
+          presentCount++;
+          return 'P';
+        }
+        return 'A';
+      });
+
+      const totalSessions = sessions.length;
+      const percentage = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : 100;
+
+      if (statusCols.length > 0) {
+        res.write(`${name},${email},${statusCols.join(',')},${presentCount},${totalSessions},${percentage}%\n`);
+      } else {
+        res.write(`${name},${email},0,0,100%\n`);
+      }
     }
 
     res.end();
@@ -294,11 +470,11 @@ async function exportCourseCSV(req, res, next) {
   }
 }
 
-// GET /api/courses/sessions/:sessionId/export — Streamed CSV export for single session
+// GET /api/courses/sessions/:sessionId/export — CSV export for single session (P or A per enrolled student)
 async function exportSessionCSV(req, res, next) {
   try {
     const sessionRes = await query(
-      `SELECT s.id, s.starts_at, c.course_code, c.name as course_name
+      `SELECT s.id, s.course_id, s.starts_at, c.course_code, c.name as course_name
        FROM sessions s
        JOIN courses c ON s.course_id = c.id
        WHERE s.id = $1`,
@@ -311,28 +487,96 @@ async function exportSessionCSV(req, res, next) {
 
     const session = sessionRes.rows[0];
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=attendance_${session.course_code}_${session.id}.csv`);
-    res.write('Student Name,Student Email,Status,Marked At (IST),Distance (m)\n');
+    const studentsRes = await query(
+      `SELECT DISTINCT u.id, u.name, u.email
+       FROM users u
+       LEFT JOIN enrollments e ON e.student_id = u.id AND e.course_id = $1
+       LEFT JOIN attendance a ON a.student_id = u.id AND a.session_id = $2
+       WHERE e.course_id = $1 OR a.session_id = $2
+       ORDER BY u.name ASC`,
+      [session.course_id, session.id]
+    );
+    const students = studentsRes.rows;
 
-    const result = await query(
-      `SELECT a.status, a.marked_at, a.distance_meters, u.name, u.email
-       FROM attendance a
-       JOIN users u ON a.student_id = u.id
-       WHERE a.session_id = $1
-       ORDER BY a.marked_at ASC`,
+    const attRes = await query(
+      `SELECT student_id, status FROM attendance WHERE session_id = $1`,
       [session.id]
     );
+    const presentSet = new Set(
+      attRes.rows.filter(r => r.status === 'present').map(r => r.student_id)
+    );
 
-    for (const row of result.rows) {
-      const name = `"${(row.name || '').replace(/"/g, '""')}"`;
-      const email = `"${(row.email || '').replace(/"/g, '""')}"`;
-      const time = row.marked_at ? new Date(row.marked_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'N/A';
-      const dist = row.distance_meters != null ? `${row.distance_meters}m` : 'N/A';
-      res.write(`${name},${email},${row.status},"${time}","${dist}"\n`);
+    const sessionDate = new Date(session.starts_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=attendance_${session.course_code}_${sessionDate}.csv`);
+    res.write(`Student Name,Student Email,${sessionDate}\n`);
+
+    for (const student of students) {
+      const name = `"${(student.name || 'Unknown').replace(/"/g, '""')}"`;
+      const email = `"${(student.email || '').replace(/"/g, '""')}"`;
+      const status = presentSet.has(student.id) ? 'P' : 'A';
+      res.write(`${name},${email},${status}\n`);
     }
 
     res.end();
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /api/courses/:id/sessions — List all sessions for a course with attendance summary
+async function getCourseSessions(req, res, next) {
+  try {
+    const courseRes = await query(
+      'SELECT id, name, course_code FROM courses WHERE id = $1 AND teacher_id = $2',
+      [req.params.id, req.user.id]
+    );
+
+    if (courseRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Course not found or unauthorized' });
+    }
+
+    const enrolledRes = await query(
+      'SELECT COUNT(*) as count FROM enrollments WHERE course_id = $1',
+      [req.params.id]
+    );
+    const enrolledCount = parseInt(enrolledRes.rows[0]?.count, 10) || 0;
+
+    const sessionsRes = await query(
+      `SELECT s.id, s.starts_at, s.ends_at, s.is_active, s.radius_meters
+       FROM sessions s
+       WHERE s.course_id = $1
+       ORDER BY s.starts_at DESC`,
+      [req.params.id]
+    );
+
+    const attRes = await query(
+      `SELECT a.session_id, COUNT(*) as count
+       FROM attendance a
+       JOIN sessions s ON a.session_id = s.id
+       WHERE s.course_id = $1 AND a.status = 'present'
+       GROUP BY a.session_id`,
+      [req.params.id]
+    );
+
+    const attMap = {};
+    for (const r of attRes.rows) {
+      attMap[r.session_id] = parseInt(r.count, 10) || 0;
+    }
+
+    res.json({
+      course: courseRes.rows[0],
+      sessions: sessionsRes.rows.map(s => ({
+        id: s.id,
+        startsAt: s.starts_at,
+        endsAt: s.ends_at,
+        isActive: s.is_active,
+        radiusMeters: s.radius_meters,
+        presentCount: attMap[s.id] || 0,
+        enrolledCount
+      }))
+    });
   } catch (err) {
     next(err);
   }
@@ -344,6 +588,9 @@ module.exports = {
   getCourseStudents,
   enrollStudents,
   joinCourse,
+  getCourseAttendanceMatrix,
   exportCourseCSV,
-  exportSessionCSV
+  exportSessionCSV,
+  getCourseSessions
 };
+

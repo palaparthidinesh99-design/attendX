@@ -5,8 +5,10 @@ const {
   getCourseStudents,
   enrollStudents,
   joinCourse,
+  getCourseAttendanceMatrix,
   exportCourseCSV,
-  exportSessionCSV
+  exportSessionCSV,
+  getCourseSessions
 } = require('../controllers/courseController');
 const { authenticate, requireRole } = require('../middlewares/auth');
 
@@ -17,6 +19,8 @@ router.get('/', authenticate, getCourses);
 router.get('/:id/students', authenticate, requireRole('teacher'), getCourseStudents);
 router.post('/:id/enroll', authenticate, requireRole('teacher'), enrollStudents);
 router.post('/join', authenticate, requireRole('student'), joinCourse);
+router.get('/:id/attendance-matrix', authenticate, requireRole('teacher'), getCourseAttendanceMatrix);
+router.get('/:id/sessions', authenticate, requireRole('teacher'), getCourseSessions);
 router.get('/:id/export-csv', authenticate, requireRole('teacher'), exportCourseCSV);
 router.get('/sessions/:sessionId/export', authenticate, requireRole('teacher'), exportSessionCSV);
 

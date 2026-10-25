@@ -237,7 +237,7 @@ async function getTeacherSessions(req, res, next) {
   }
 }
 
-// GET /api/sessions/:id/export-csv — CSV export for single session
+// GET /api/sessions/:id/export-csv — CSV export for single session (Names on rows, session date column, P or A for each enrolled student)
 async function exportSessionAttendanceCSV(req, res, next) {
   try {
     const sessionRes = await query(
@@ -257,25 +257,38 @@ async function exportSessionAttendanceCSV(req, res, next) {
       return res.status(403).json({ error: 'Not your session' });
     }
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=attendance_${session.course_code}_${session.id}.csv`);
-    res.write('Course Code,Session Name,Date,Student Name,Student Email,Status,Timestamp (IST),Distance (m)\n');
+    // 1. Fetch all enrolled students (and attendees)
+    const studentsRes = await query(
+      `SELECT DISTINCT u.id, u.name, u.email
+       FROM users u
+       LEFT JOIN enrollments e ON e.student_id = u.id AND e.course_id = $1
+       LEFT JOIN attendance a ON a.student_id = u.id AND a.session_id = $2
+       WHERE e.course_id = $1 OR a.session_id = $2
+       ORDER BY u.name ASC`,
+      [session.course_id, session.id]
+    );
+    const students = studentsRes.rows;
 
-    const result = await query(
-      `SELECT a.status, a.marked_at, a.distance_meters, u.name as student_name, u.email as student_email
-       FROM attendance a
-       JOIN users u ON a.student_id = u.id
-       WHERE a.session_id = $1
-       ORDER BY a.marked_at ASC`,
+    // 2. Fetch attendance records for this session
+    const attRes = await query(
+      `SELECT student_id, status FROM attendance WHERE session_id = $1`,
       [session.id]
     );
+    const presentSet = new Set(
+      attRes.rows.filter(r => r.status === 'present').map(r => r.student_id)
+    );
 
-    for (const r of result.rows) {
-      const name = `"${(r.student_name || 'Unknown').replace(/"/g, '""')}"`;
-      const email = `"${(r.student_email || '').replace(/"/g, '""')}"`;
-      const time = r.marked_at ? new Date(r.marked_at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '-';
-      const dist = r.distance_meters != null ? `${r.distance_meters}m` : '-';
-      res.write(`"${session.course_code}","${session.course_name}","${new Date(session.starts_at).toISOString().split('T')[0]}",${name},${email},"${r.status}","${time}","${dist}"\n`);
+    const sessionDate = new Date(session.starts_at).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=attendance_${session.course_code}_${sessionDate}.csv`);
+    res.write(`Student Name,Student Email,${sessionDate}\n`);
+
+    for (const student of students) {
+      const name = `"${(student.name || 'Unknown').replace(/"/g, '""')}"`;
+      const email = `"${(student.email || '').replace(/"/g, '""')}"`;
+      const status = presentSet.has(student.id) ? 'P' : 'A';
+      res.write(`${name},${email},${status}\n`);
     }
 
     res.end();
