@@ -3,10 +3,20 @@
 export function formatUrl(raw) {
   if (!raw || !raw.trim()) return '';
   let url = raw.trim();
+
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
     url = 'https://' + url;
   }
-  return url.replace(/\/+$/, '');
+
+  try {
+    const parsed = new URL(url);
+    if (!parsed.hostname.includes('.') && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
+      parsed.hostname = `${parsed.hostname}.onrender.com`;
+    }
+    return parsed.origin;
+  } catch (_) {
+    return url.replace(/\/+$/, '');
+  }
 }
 
 export function getApiBase() {
@@ -27,6 +37,10 @@ export function getApiBase() {
     const host = window.location.hostname;
     if (host === 'localhost' || host === '127.0.0.1') {
       return '';
+    }
+    // 4. Default for Render deployment
+    if (host.includes('onrender.com')) {
+      return 'https://attendx-backend-yo7n.onrender.com';
     }
   }
 
