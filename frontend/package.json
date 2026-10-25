@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^14.0.0",
     "canvas-confetti": "^1.9.4",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^1.61.0",

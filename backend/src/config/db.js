@@ -88,8 +88,21 @@ async function initDB() {
         email TEXT NOT NULL UNIQUE,
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL CHECK (role IN ('student', 'teacher', 'admin')),
+        current_challenge TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    CREATE TABLE IF NOT EXISTS webauthn_credentials (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        credential_id TEXT NOT NULL UNIQUE,
+        public_key TEXT NOT NULL,
+        counter BIGINT NOT NULL DEFAULT 0,
+        transports JSONB DEFAULT '[]'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
 
     CREATE TABLE IF NOT EXISTS courses (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -148,6 +161,9 @@ async function initDB() {
       // In some environments / pg-mem, extension is built-in
     }
     await p.query(schemaSQL);
+    try {
+      await p.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS current_challenge TEXT;`);
+    } catch (_) {}
     console.log('✅ PostgreSQL Schema initialized successfully');
   } catch (err) {
     console.error('❌ Failed to initialize PostgreSQL Schema:', err.message);

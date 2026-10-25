@@ -227,6 +227,19 @@ async function runApiTests() {
     assert('Student analytics returns 200 OK with subjects and calendar breakdown',
       analyticsRes.status === 200 && Array.isArray(analyticsRes.body.subjects) && analyticsRes.body.subjects.length > 0);
 
+    // ── 9. WebAuthn Hardware Passkey Biometric Endpoints ──────────────────
+    const webauthnStatusRes = await request(app)
+      .get('/api/auth/webauthn-status')
+      .set('Authorization', `Bearer ${studentToken}`);
+    assert('/api/auth/webauthn-status returns 200 OK and registration status',
+      webauthnStatusRes.status === 200 && typeof webauthnStatusRes.body.isRegistered === 'boolean');
+
+    const regOptsRes = await request(app)
+      .post('/api/auth/webauthn/register-options')
+      .set('Authorization', `Bearer ${studentToken}`);
+    assert('/api/auth/webauthn/register-options generates challenge and 200 OK',
+      regOptsRes.status === 200 && !!regOptsRes.body.challenge);
+
     console.log(`\n🎉 PostgreSQL Integration Test Suite Completed: ${passed} passed, ${failed} failed\n`);
   } catch (err) {
     console.error('❌ Test suite fatal error:', err);

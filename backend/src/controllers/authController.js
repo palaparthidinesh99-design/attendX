@@ -1,6 +1,30 @@
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const {
+  generateRegistrationOptions,
+  verifyRegistrationResponse,
+  generateAuthenticationOptions,
+  verifyAuthenticationResponse
+} = require('@simplewebauthn/server');
 const { query } = require('../config/db');
+
+function getRPInfo(req) {
+  const originHeader = req.get('origin') || req.get('referer');
+  if (originHeader) {
+    try {
+      const u = new URL(originHeader);
+      return {
+        origin: u.origin,
+        rpID: u.hostname
+      };
+    } catch (_) {}
+  }
+  const host = req.get('host') || req.hostname;
+  return {
+    origin: `${req.protocol}://${host}`,
+    rpID: req.hostname === 'localhost' ? 'localhost' : req.hostname
+  };
+}
 
 function signToken(user) {
   return jwt.sign(
@@ -112,27 +136,170 @@ async function login(req, res, next) {
   }
 }
 
-// GET /api/auth/webauthn-status — Check passkey status
-async function getWebAuthnStatus(req, res) {
-  // Returns active so student dashboard passkey flow stays smooth
-  res.json({ isRegistered: true, deviceCount: 1 });
+// GET /api/auth/webauthn-status — Check passkey registration status
+async function getWebAuthnStatus(req, res, next) {
+  try {
+    const credRes = await query(
+      'SELECT id, credential_id, created_at FROM webauthn_credentials WHERE user_id = $1',
+      [req.user.id]
+    );
+    const count = credRes.rows.length;
+    res.json({ isRegistered: count > 0, deviceCount: count });
+  } catch (err) {
+    next(err);
+  }
 }
 
-// Passkey registration & verification stubs (native biometric fallback)
-async function getRegisterOptions(req, res) {
-  res.json({ challenge: 'webauthn_challenge_pg', user: { id: req.user.id } });
+// POST /api/auth/webauthn/register-options — Generate Registration Challenge
+async function getRegisterOptions(req, res, next) {
+  try {
+    const userRes = await query('SELECT id, name, email FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const user = userRes.rows[0];
+
+    const credsRes = await query('SELECT credential_id, transports FROM webauthn_credentials WHERE user_id = $1', [user.id]);
+    const { origin, rpID } = getRPInfo(req);
+
+    const options = await generateRegistrationOptions({
+      rpName: 'AttendX Biometric Portal',
+      rpID,
+      userID: new Uint8Array(Buffer.from(user.id.toString())),
+      userName: user.email,
+      userDisplayName: user.name,
+      attestationType: 'none',
+      authenticatorSelection: {
+        userVerification: 'preferred',
+        residentKey: 'discouraged'
+      },
+      excludeCredentials: credsRes.rows.map(c => ({
+        id: c.credential_id,
+        transports: typeof c.transports === 'string' ? JSON.parse(c.transports) : (c.transports || ['internal'])
+      }))
+    });
+
+    await query('UPDATE users SET current_challenge = $1 WHERE id = $2', [options.challenge, user.id]);
+    res.json(options);
+  } catch (err) {
+    next(err);
+  }
 }
 
-async function verifyRegister(req, res) {
-  res.json({ verified: true, message: 'Hardware Passkey verified successfully' });
+// POST /api/auth/webauthn/register-verify — Verify Hardware Attestation Response
+async function verifyRegister(req, res, next) {
+  try {
+    const { body } = req;
+    const userRes = await query('SELECT id, current_challenge FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows.length === 0 || !userRes.rows[0].current_challenge) {
+      return res.status(400).json({ error: 'Registration challenge expired or missing' });
+    }
+    const user = userRes.rows[0];
+    const { origin, rpID } = getRPInfo(req);
+
+    const verification = await verifyRegistrationResponse({
+      response: body,
+      expectedChallenge: user.current_challenge,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
+      requireUserVerification: false
+    });
+
+    if (verification.verified && verification.registrationInfo) {
+      const { credential } = verification.registrationInfo;
+      const credentialID = credential.id;
+      const publicKey = Buffer.from(credential.publicKey).toString('base64url');
+      const counter = credential.counter || 0;
+      const transports = JSON.stringify(body.response?.transports || ['internal']);
+
+      await query(
+        `INSERT INTO webauthn_credentials (user_id, credential_id, public_key, counter, transports)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (credential_id) DO UPDATE SET public_key = $3, counter = $4, transports = $5`,
+        [user.id, credentialID, publicKey, counter, transports]
+      );
+
+      await query('UPDATE users SET current_challenge = NULL WHERE id = $1', [user.id]);
+      return res.json({ verified: true, message: 'Hardware Touch ID / Fingerprint registered successfully!' });
+    }
+
+    res.status(400).json({ verified: false, error: 'Biometric registration verification failed' });
+  } catch (err) {
+    next(err);
+  }
 }
 
-async function getAuthOptions(req, res) {
-  res.json({ challenge: 'webauthn_auth_challenge_pg' });
+// POST /api/auth/webauthn/authenticate-options — Generate Authentication Challenge
+async function getAuthOptions(req, res, next) {
+  try {
+    const userRes = await query('SELECT id FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+
+    const credsRes = await query('SELECT credential_id, transports FROM webauthn_credentials WHERE user_id = $1', [req.user.id]);
+    if (credsRes.rows.length === 0) {
+      return res.status(403).json({ error: 'No registered biometric passkey found. Please register hardware Touch ID / Fingerprint first.' });
+    }
+
+    const { origin, rpID } = getRPInfo(req);
+    const options = await generateAuthenticationOptions({
+      rpID,
+      userVerification: 'preferred',
+      allowCredentials: credsRes.rows.map(c => ({
+        id: c.credential_id,
+        transports: typeof c.transports === 'string' ? JSON.parse(c.transports) : (c.transports || ['internal'])
+      }))
+    });
+
+    await query('UPDATE users SET current_challenge = $1 WHERE id = $2', [options.challenge, req.user.id]);
+    res.json(options);
+  } catch (err) {
+    next(err);
+  }
 }
 
-async function verifyAuth(req, res) {
-  res.json({ verified: true, message: 'Hardware Passkey authenticated successfully' });
+// POST /api/auth/webauthn/authenticate-verify — Verify Hardware Signature
+async function verifyAuth(req, res, next) {
+  try {
+    const { body } = req;
+    const userRes = await query('SELECT id, current_challenge FROM users WHERE id = $1', [req.user.id]);
+    if (userRes.rows.length === 0 || !userRes.rows[0].current_challenge) {
+      return res.status(400).json({ error: 'Authentication challenge expired or missing' });
+    }
+
+    const credRes = await query(
+      'SELECT credential_id, public_key, counter FROM webauthn_credentials WHERE user_id = $1 AND credential_id = $2',
+      [req.user.id, body.id]
+    );
+
+    if (credRes.rows.length === 0) {
+      return res.status(400).json({ error: 'Passkey device credential not registered for this account' });
+    }
+
+    const cred = credRes.rows[0];
+    const { origin, rpID } = getRPInfo(req);
+
+    const verification = await verifyAuthenticationResponse({
+      response: body,
+      expectedChallenge: userRes.rows[0].current_challenge,
+      expectedOrigin: origin,
+      expectedRPID: rpID,
+      credential: {
+        id: cred.credential_id,
+        publicKey: Buffer.from(cred.public_key, 'base64url'),
+        counter: parseInt(cred.counter, 10) || 0
+      },
+      requireUserVerification: false
+    });
+
+    if (verification.verified) {
+      const newCounter = verification.authenticationInfo?.newCounter || cred.counter;
+      await query('UPDATE webauthn_credentials SET counter = $1 WHERE credential_id = $2', [newCounter, cred.credential_id]);
+      await query('UPDATE users SET current_challenge = NULL WHERE id = $1', [req.user.id]);
+      return res.json({ verified: true, message: 'Hardware Touch ID / Fingerprint verified successfully!' });
+    }
+
+    res.status(400).json({ verified: false, error: 'Biometric verification failed' });
+  } catch (err) {
+    next(err);
+  }
 }
 
 module.exports = {
