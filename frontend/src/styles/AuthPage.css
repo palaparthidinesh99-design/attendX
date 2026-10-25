@@ -115,3 +115,97 @@
   color: var(--primary-color);
   font-weight: 600;
 }
+
+.server-config-section {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed var(--border-color);
+}
+
+.server-config-toggle {
+  background: transparent;
+  border: none;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  transition: var(--transition);
+}
+
+.server-config-toggle:hover {
+  color: var(--text-primary);
+  background: var(--surface-subtle);
+}
+
+.server-url-badge {
+  font-family: monospace;
+  font-size: 0.74rem;
+  background: var(--surface-subtle);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.server-config-box {
+  margin-top: 0.65rem;
+  padding: 0.75rem;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.server-config-help {
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.5rem;
+  line-height: 1.3;
+}
+
+.server-config-help code {
+  font-family: monospace;
+  font-size: 0.72rem;
+  background: var(--surface-color);
+  padding: 0.1rem 0.25rem;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+}
+
+.server-input-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.form-input-sm {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+  font-family: monospace;
+}
+
+.status-text {
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-top: 0.4rem;
+}
+
+.status-text.checking {
+  color: #d97706;
+}
+
+.status-text.connected {
+  color: #16a34a;
+}
+
+.status-text.disconnected {
+  color: #dc2626;
+}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { apiFetch, saveAuth, getUser, getToken } from '../utils/api';
+import { apiFetch, saveAuth, getUser, getToken, getApiBase, setCustomApiBase, checkBackendHealth } from '../utils/api';
 import '../styles/AuthPage.css';
 
 export default function AuthPage() {
@@ -16,6 +16,11 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  // Backend configuration state
+  const [showConfig, setShowConfig] = useState(false);
+  const [customUrl, setCustomUrl] = useState(getApiBase());
+  const [healthStatus, setHealthStatus] = useState(null); // 'checking' | 'connected' | 'disconnected'
+
   // If already logged in, redirect by role
   useEffect(() => {
     const user = getUser();
@@ -24,6 +29,18 @@ export default function AuthPage() {
       navigate(String(user.role).toLowerCase() === 'teacher' ? '/teacher' : '/student');
     }
   }, [navigate]);
+
+  const testHealth = async () => {
+    setHealthStatus('checking');
+    const ok = await checkBackendHealth();
+    setHealthStatus(ok ? 'connected' : 'disconnected');
+  };
+
+  const handleSaveConfig = (e) => {
+    e.preventDefault();
+    setCustomApiBase(customUrl);
+    testHealth();
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -60,6 +77,8 @@ export default function AuthPage() {
     }
   };
 
+  const currentBackend = getApiBase() || '(Same Origin / Render Web Service)';
+
   return (
     <div className="auth-page">
       <div className="auth-card">
@@ -84,7 +103,11 @@ export default function AuthPage() {
           </button>
         </div>
 
-        {error && <div className="alert alert-error">{error}</div>}
+        {error && (
+          <div className="alert alert-error" style={{ textAlign: 'left', fontSize: '0.82rem' }}>
+            {error}
+          </div>
+        )}
 
         <form onSubmit={handleSubmit}>
           {tab === 'register' && (
@@ -175,6 +198,43 @@ export default function AuthPage() {
           ) : (
             <p>Already have an account? <a href="#signin" onClick={(e) => { e.preventDefault(); setTab('login'); setError(''); }}>Sign in</a></p>
           )}
+
+          {/* Backend Connection Config Option */}
+          <div className="server-config-section">
+            <button
+              type="button"
+              className="server-config-toggle"
+              onClick={() => setShowConfig(!showConfig)}
+            >
+              ⚙️ Server: <span className="server-url-badge">{currentBackend}</span>
+            </button>
+
+            {showConfig && (
+              <div className="server-config-box">
+                <p className="server-config-help">
+                  Paste your Render backend Web Service URL (e.g. <code>https://attendx-backend-xxxx.onrender.com</code>):
+                </p>
+                <div className="server-input-row">
+                  <input
+                    type="url"
+                    placeholder="https://your-backend.onrender.com"
+                    value={customUrl}
+                    onChange={(e) => setCustomUrl(e.target.value)}
+                    className="form-input form-input-sm"
+                  />
+                  <button type="button" onClick={handleSaveConfig} className="btn btn-sm btn-primary">
+                    Save
+                  </button>
+                  <button type="button" onClick={testHealth} className="btn btn-sm btn-outline">
+                    Test
+                  </button>
+                </div>
+                {healthStatus === 'checking' && <p className="status-text checking">Checking connection…</p>}
+                {healthStatus === 'connected' && <p className="status-text connected">✅ Connected to backend!</p>}
+                {healthStatus === 'disconnected' && <p className="status-text disconnected">❌ Unreachable (Render may be starting up)</p>}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

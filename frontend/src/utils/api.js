@@ -1,8 +1,47 @@
-// Central API utility
+// Central API utility for AttendX
 
-export const API_BASE = (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
-  ? (import.meta.env.VITE_API_BASE_URL || 'https://attendx-qnqb.onrender.com')
-  : '';
+export function formatUrl(raw) {
+  if (!raw || !raw.trim()) return '';
+  let url = raw.trim();
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    url = 'https://' + url;
+  }
+  return url.replace(/\/+$/, '');
+}
+
+export function getApiBase() {
+  // 1. Manual user override stored in localStorage
+  const custom = localStorage.getItem('attendx_custom_api_url');
+  if (custom && custom.trim()) {
+    return formatUrl(custom);
+  }
+
+  // 2. Injected Vite environment variable from Render Blueprint
+  const envUrl = import.meta.env.VITE_API_BASE_URL;
+  if (envUrl && envUrl.trim()) {
+    return formatUrl(envUrl);
+  }
+
+  // 3. Localhost dev environment uses Vite dev proxy
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return '';
+    }
+  }
+
+  return '';
+}
+
+export function setCustomApiBase(url) {
+  if (!url || !url.trim()) {
+    localStorage.removeItem('attendx_custom_api_url');
+  } else {
+    localStorage.setItem('attendx_custom_api_url', formatUrl(url));
+  }
+}
+
+export const API_BASE = getApiBase();
 
 export function getToken() {
   return localStorage.getItem('attendx_token');
@@ -26,6 +65,21 @@ export function clearAuth() {
   localStorage.removeItem('attendx_user');
 }
 
+export async function checkBackendHealth() {
+  const base = getApiBase();
+  const testUrl = base ? `${base}/health` : '/health';
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 7000);
+  try {
+    const res = await fetch(testUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch (_) {
+    clearTimeout(timeoutId);
+    return false;
+  }
+}
+
 export async function apiFetch(endpoint, options = {}) {
   const token = getToken();
   const headers = {
@@ -34,11 +88,35 @@ export async function apiFetch(endpoint, options = {}) {
     ...options.headers
   };
 
-  const url = `${API_BASE}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
-  const response = await fetch(url, {
-    ...options,
-    headers
-  });
+  const base = getApiBase();
+  const path = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
+  const url = base ? `${base}${path}` : path;
+
+  // 20 second timeout for Render free tier spinning up
+  const controller = new AbortController();
+  const timeoutMs = options.timeout || 20000;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+      signal: controller.signal
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error(
+        `Backend server request timed out (${timeoutMs / 1000}s). If your Render backend is on the free tier, it may be waking up from sleep. Please try again in 10-15 seconds.`
+      );
+    }
+    throw new Error(
+      `Cannot connect to backend server at ${base || window.location.origin}. Please verify your Backend URL.`
+    );
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (response.status === 401) {
     clearAuth();
@@ -58,7 +136,7 @@ export async function apiFetch(endpoint, options = {}) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || 'Request failed');
+    throw new Error(text || `Request failed with status ${response.status}`);
   }
 
   return response;

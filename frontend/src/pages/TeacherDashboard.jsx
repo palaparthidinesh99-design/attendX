@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
-import { apiFetch, API_BASE, getToken } from '../utils/api';
+import { apiFetch, getApiBase, getToken } from '../utils/api';
 import Navbar from '../components/Navbar';
 import {
   Play,
@@ -464,7 +464,7 @@ export default function TeacherDashboard() {
                       </button>
 
                       <a
-                        href={`${API_BASE}/api/courses/${course.id}/export-csv?token=${getToken()}`}
+                        href={`${getApiBase()}/api/courses/${course.id}/export-csv?token=${getToken()}`}
                         target="_blank"
                         rel="noreferrer"
                         className="btn btn-outline btn-sm"
@@ -600,7 +600,7 @@ export default function TeacherDashboard() {
 
             <div className="modal-footer">
               <a
-                href={`${API_BASE}/api/courses/${activeCourseDetails.courseId}/export-csv?token=${getToken()}`}
+                href={`${getApiBase()}/api/courses/${activeCourseDetails.courseId}/export-csv?token=${getToken()}`}
                 target="_blank"
                 rel="noreferrer"
                 className="btn btn-outline"
